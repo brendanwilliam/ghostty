@@ -1,0 +1,71 @@
+name: GhosttyiOS
+options:
+  minimumXcodeGenVersion: 2.38.0
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  # 0.12.0 rather than 0.12.1: 0.12.1 swapped its SSH implementation to
+  # an unvetted third-party fork of swift-nio-ssh.
+  Citadel:
+    url: https://github.com/orlandos-nl/Citadel.git
+    exactVersion: 0.12.0
+  # Citadel's own SSH dependency; listed so the app can import NIOSSH.
+  swift-nio-ssh:
+    url: https://github.com/Joannis/swift-nio-ssh.git
+    minorVersion: 0.3.4
+  swift-nio:
+    url: https://github.com/apple/swift-nio.git
+    from: 2.81.0
+targets:
+  GhosttyiOS:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+    configFiles:
+      Debug: Config/Base.xcconfig
+      Release: Config/Base.xcconfig
+    settings:
+      base:
+        SWIFT_VERSION: 5.0
+        PRODUCT_MODULE_NAME: GhosttyiOS
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Config/Info.plist
+        TARGETED_DEVICE_FAMILY: "1,2"
+        OTHER_LDFLAGS: "-lstdc++"
+    dependencies:
+      - framework: ../macos/GhosttyKit.xcframework
+        embed: false
+      - package: Citadel
+        product: Citadel
+      - package: swift-nio-ssh
+        product: NIOSSH
+      - package: swift-nio
+        product: NIOCore
+      - sdk: Metal.framework
+      - sdk: QuartzCore.framework
+      - sdk: CoreText.framework
+      - sdk: CoreGraphics.framework
+      - sdk: CoreVideo.framework
+      - sdk: IOSurface.framework
+  GhosttyiOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    settings:
+      base:
+        SWIFT_VERSION: 5.0
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Ghostty.app/Ghostty"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+    dependencies:
+      - target: GhosttyiOS
+schemes:
+  GhosttyiOS:
+    build:
+      targets:
+        GhosttyiOS: all
+        GhosttyiOSTests: [test]
+    test:
+      targets:
+        - GhosttyiOSTests
