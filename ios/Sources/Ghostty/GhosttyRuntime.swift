@@ -22,17 +22,23 @@ final class GhosttyRuntime {
     private let surfaces = NSHashTable<TerminalSurfaceView>.weakObjects()
 
     private init() {
-        // Bundled themes live in <bundle>/ghostty/themes; libghostty finds
-        // them through its resources directory.
+        // Bundled themes live in <bundle>/GhosttyResources/themes; libghostty
+        // finds them through its resources directory.
         if let resources = ConfigPaths.resources {
             setenv("GHOSTTY_RESOURCES_DIR", resources.path, 1)
         }
+        // Keep libghostty's XDG config lookups inside a writable directory.
+        try? FileManager.default.createDirectory(
+            at: ConfigPaths.overrides.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        setenv("XDG_CONFIG_HOME", ConfigPaths.configHome.path, 1)
 
         if ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) != GHOSTTY_SUCCESS {
             logger.critical("ghostty_init failed")
             return
         }
 
+        Self.migrateLegacyOverrides()
         Self.removeLegacySeedConfig()
         guard let built = ConfigBuilder.build(remote: nil) else {
             logger.critical("ghostty_config_new failed")
@@ -114,6 +120,16 @@ final class GhosttyRuntime {
         for view in surfaces.allObjects {
             view.reloadConfig()
         }
+    }
+
+    /// Move an overrides file from the old `~/.config` location (only
+    /// ever writable on the simulator) to the current one.
+    private static func migrateLegacyOverrides() {
+        let fm = FileManager.default
+        let old = ConfigPaths.legacyOverrides
+        guard fm.fileExists(atPath: old.path),
+              !fm.fileExists(atPath: ConfigPaths.overrides.path) else { return }
+        try? fm.moveItem(at: old, to: ConfigPaths.overrides)
     }
 
     /// Version 1 seeded the overrides file with its defaults. Those now

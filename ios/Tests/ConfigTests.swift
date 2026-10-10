@@ -198,6 +198,17 @@ final class ConfigBuilderTests: XCTestCase {
         XCTAssertEqual(defaultsOnly.float("font-size"), 12)
     }
 
+    /// On a device only Library/, Documents/, and tmp/ are writable; the
+    /// simulator also allows the container root, so it can't catch this.
+    func testOverridesLiveInADeviceWritableDirectory() throws {
+        let home = URL(fileURLWithPath: NSHomeDirectory()).standardizedFileURL.path
+        let overrides = ConfigPaths.overrides.standardizedFileURL.path
+        XCTAssertTrue(overrides.hasPrefix(home + "/Library/"), overrides)
+        XCTAssertEqual(
+            ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"].map { URL(fileURLWithPath: $0).standardizedFileURL.path },
+            ConfigPaths.configHome.standardizedFileURL.path)
+    }
+
     func testBundledThemeResolves() {
         XCTAssertTrue(ThemeCatalog.isBundled("Cutie Pro"))
         XCTAssertGreaterThan(ThemeCatalog.names.count, 400)

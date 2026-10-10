@@ -3,10 +3,23 @@ import GhosttyKit
 
 /// Where the app's config layers live.
 enum ConfigPaths {
+    /// The app's XDG config home, exported as `XDG_CONFIG_HOME` so
+    /// libghostty resolves relative `config-file` includes and user themes
+    /// (`ghostty/themes`) here. It can't be `~/.config`: on a device the
+    /// root of the app container isn't writable (the simulator allows it).
+    static var configHome: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("config")
+    }
+
     /// The app's own settings (global overrides). Settings edits this file.
-    /// It sits at the XDG path, so `config-file` includes and user themes in
-    /// `~/.config/ghostty/themes` work as on desktop.
     static var overrides: URL {
+        configHome.appendingPathComponent("ghostty/config.ghostty")
+    }
+
+    /// Where versions before this one put the overrides file. Only ever
+    /// written successfully on the simulator.
+    static var legacyOverrides: URL {
         URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".config/ghostty/config.ghostty")
     }

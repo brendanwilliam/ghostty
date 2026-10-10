@@ -40,7 +40,7 @@ Each terminal uses a layered Ghostty config. Later layers win:
      `initial-command`, `working-directory`, keybinds, and `macos-*`/`gtk-*`
      window options. Settings → Host configs lists what was dropped.
    - You can turn this off per host.
-3. **Settings:** the app's own `~/.config/ghostty/config.ghostty`.
+3. **Settings:** the app's own `config.ghostty`, in `Library/Application Support/config/ghostty/` (which the app sets as `XDG_CONFIG_HOME`; the container root isn't writable on a device).
    - Settings has quick controls for common options, an **All options** list
      covering every Ghostty option with its docs, and a raw file editor.
    - Edits are checked with libghostty before they're saved, and they apply to
