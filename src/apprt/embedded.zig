@@ -19,6 +19,7 @@ const terminal = @import("../terminal/main.zig");
 const CoreApp = @import("../App.zig");
 const CoreInspector = @import("../inspector/main.zig").Inspector;
 const CoreSurface = @import("../Surface.zig");
+const termio = @import("../termio.zig");
 const configpkg = @import("../config.zig");
 const Config = configpkg.Config;
 const String = @import("../main_c.zig").String;
@@ -458,6 +459,26 @@ pub const Surface = struct {
     /// that getTitle works without the implementer needing to save it.
     title: ?[:0]const u8 = null,
 
+    /// If set, the surface uses host-provided IO instead of spawning a
+    /// subprocess. See `IoMode.manual`.
+    manual_io: ?termio.Manual.Config = null,
+
+    /// When the surface was created, used to report session runtime
+    /// for manual IO surfaces.
+    created: std.Io.Timestamp = .zero,
+
+    /// How the surface performs terminal IO.
+    pub const IoMode = enum(c_int) {
+        /// Spawn the configured command in a pty (the default).
+        exec = 0,
+
+        /// No subprocess. The host feeds program output with
+        /// `ghostty_surface_write_output` and receives terminal input
+        /// via `io_write_cb`. Required on platforms without subprocess
+        /// support, such as iOS.
+        manual = 1,
+    };
+
     /// Surface initialization options.
     pub const Options = extern struct {
         /// The platform that this surface is being initialized for and
@@ -499,6 +520,13 @@ pub const Surface = struct {
 
         /// Context for the new surface
         context: apprt.surface.NewSurfaceContext = .window,
+
+        /// How the surface performs IO. For `manual`, the callbacks below
+        /// are invoked with `userdata` and the command, working directory,
+        /// and environment options are ignored.
+        io_mode: IoMode = .exec,
+        io_write_cb: ?termio.Manual.WriteFn = null,
+        io_resize_cb: ?termio.Manual.ResizeFn = null,
     };
 
     pub fn init(self: *Surface, app: *App, opts: Options) !void {
@@ -513,6 +541,15 @@ pub const Surface = struct {
             },
             .size = .{ .width = 800, .height = 600 },
             .cursor_pos = .{ .x = -1, .y = -1 },
+            .manual_io = switch (opts.io_mode) {
+                .exec => null,
+                .manual => .{
+                    .userdata = opts.userdata,
+                    .write = opts.io_write_cb,
+                    .resize = opts.io_resize_cb,
+                },
+            },
+            .created = .now(global.io(), .awake),
         };
 
         // Add ourselves to the list of surfaces on the app.
@@ -1176,6 +1213,12 @@ pub const Surface = struct {
             .working_directory = working_directory,
             .context = context,
         };
+    }
+
+    /// Called by the core surface to determine whether to use
+    /// host-provided IO instead of spawning a subprocess.
+    pub fn manualTermio(self: *const Surface) ?termio.Manual.Config {
+        return self.manual_io;
     }
 
     pub fn defaultTermioEnv(self: *const Surface) !std.process.Environ.Map {
@@ -1857,6 +1900,46 @@ pub const CAPI = struct {
     /// Returns true if the surface process has exited.
     export fn ghostty_surface_process_exited(surface: *Surface) bool {
         return surface.core_surface.child_exited;
+    }
+
+    /// Feed program output into a manual IO surface, as if it were read
+    /// from a pty. This may be called from any thread.
+    export fn ghostty_surface_write_output(
+        surface: *Surface,
+        ptr: [*]const u8,
+        len: usize,
+    ) void {
+        if (surface.manual_io == null) {
+            log.warn("ghostty_surface_write_output called on non-manual surface", .{});
+            return;
+        }
+        if (len == 0) return;
+        surface.core_surface.io.processOutput(ptr[0..len]);
+    }
+
+    /// Notify a manual IO surface that the session on the other end has
+    /// ended. This behaves like the child process exiting and must be
+    /// called from the main thread.
+    export fn ghostty_surface_session_exited(
+        surface: *Surface,
+        exit_code: u32,
+    ) void {
+        if (surface.manual_io == null) {
+            log.warn("ghostty_surface_session_exited called on non-manual surface", .{});
+            return;
+        }
+        if (surface.core_surface.child_exited) return;
+
+        const runtime_ms: u64 = @intCast(@max(
+            0,
+            surface.created.untilNow(global.io(), .awake).toMilliseconds(),
+        ));
+        surface.core_surface.handleMessage(.{ .child_exited = .{
+            .exit_code = exit_code,
+            .runtime_ms = runtime_ms,
+        } }) catch |err| {
+            log.err("error handling session exit err={}", .{err});
+        };
     }
 
     /// Returns true if the surface has a selection.
