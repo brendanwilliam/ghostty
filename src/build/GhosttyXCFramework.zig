@@ -24,6 +24,33 @@ pub fn init(
         Config.genericMacOSTarget(b, null),
     ));
 
+    // iOS device and simulator. These are only built when requested
+    // since they roughly triple the build time.
+    const ios_libs: ?[2]GhosttyLib = if (target == .ios) .{
+        try GhosttyLib.initStatic(b, &try deps.retarget(
+            b,
+            b.resolveTargetQuery(.{
+                .cpu_arch = .aarch64,
+                .os_tag = .ios,
+                .os_version_min = Config.osVersionMin(.ios),
+                .abi = null,
+            }),
+        )),
+        try GhosttyLib.initStatic(b, &try deps.retarget(
+            b,
+            b.resolveTargetQuery(.{
+                .cpu_arch = .aarch64,
+                .os_tag = .ios,
+                .os_version_min = Config.osVersionMin(.ios),
+                .abi = .simulator,
+
+                // The simulator doesn't support the generic CPU model due
+                // to missing "altnzcv" instructions, so force an Apple CPU.
+                .cpu_model = .{ .explicit = &std.Target.aarch64.cpu.apple_a17 },
+            }),
+        )),
+    } else null;
+
     // Generate a headers directory with only ghostty.h and the module
     // map. We can't use include/ directly because it also contains the
     // libghostty-vt headers under include/ghostty/, which would trigger
@@ -53,6 +80,24 @@ pub fn init(
                 .headers = headers,
                 .dsym = macos_native.dsym,
             }},
+
+            .ios => &.{
+                .{
+                    .library = macos_native.output,
+                    .headers = headers,
+                    .dsym = macos_native.dsym,
+                },
+                .{
+                    .library = ios_libs.?[0].output,
+                    .headers = headers,
+                    .dsym = ios_libs.?[0].dsym,
+                },
+                .{
+                    .library = ios_libs.?[1].output,
+                    .headers = headers,
+                    .dsym = ios_libs.?[1].dsym,
+                },
+            },
         },
     });
 

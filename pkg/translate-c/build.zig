@@ -181,7 +181,15 @@ pub fn initTranslator(b: *std.Build, options: Options) !Translator {
             } else null,
             .direct => |libc_file| libc_file,
         },
-        .extra_args = options.extra_args,
+        // Apple SDK headers use Blocks. Aro enables them implicitly for
+        // macOS but not for all Darwin targets (e.g. the iOS simulator).
+        .extra_args = if (options.target.result.os.tag.isDarwin())
+            try std.mem.concat(b.allocator, []const u8, &.{
+                options.extra_args,
+                &.{"-fblocks"},
+            })
+        else
+            options.extra_args,
     });
 }
 
