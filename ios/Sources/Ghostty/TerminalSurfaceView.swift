@@ -14,10 +14,65 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     var onTitleChange: ((String) -> Void)?
     var onClose: (() -> Void)?
 
+    /// Called when a pinch settles on a new column count.
+    var onColumnsSettled: ((Int) -> Void)?
+
+    /// The host's cached Ghostty config, layered between the app defaults
+    /// and the app's own settings. Nil when the host's config is off.
+    var remoteConfig: URL? {
+        didSet { reloadConfig() }
+    }
+
+    /// Columns to fit across the screen's portrait width by scaling the
+    /// font. Nil uses the config's `font-size`.
+    var targetColumns: Int? {
+        didSet {
+            guard targetColumns != oldValue, !suppressFit else { return }
+            if targetColumns == nil, let surface {
+                let action = "reset_font_size"
+                ghostty_surface_binding_action(surface, action, UInt(action.utf8.count))
+                fontPoints = configFontPoints
+                fontOverridden = false
+            }
+            fitColumns(force: true)
+        }
+    }
+
+    /// The font size currently applied, in points.
+    private(set) var fontPoints: Float = 12
+    /// The font size the config asks for.
+    private var configFontPoints: Float = 12
+    /// Whether we've set the font size ourselves (fit or pinch). Until
+    /// then the surface follows the config's `font-size`.
+    private var fontOverridden = false
+    private var lastFitSignature: String?
+    private var suppressFit = false
+    private var pinchStartPoints: Float = 12
+    static let fontPointRange: ClosedRange<Float> = 4...36
+
+    /// Diagnostics from the last config build, for display.
+    private(set) var configDiagnostics: [String] = []
+
     /// Software modifier state toggled from the accessory bar. These
     /// apply to the next typed character and then reset.
     private var ctrlLatched = false { didSet { accessoryBar.setCtrl(ctrlLatched) } }
     private var altLatched = false { didSet { accessoryBar.setAlt(altLatched) } }
+    private var shiftLatched = false { didSet { accessoryBar.setShift(shiftLatched) } }
+
+    /// Modifiers latched on the accessory bar, as libghostty mods.
+    private var latchedMods: ghostty_input_mods_e {
+        var mods = GHOSTTY_MODS_NONE.rawValue
+        if ctrlLatched { mods |= GHOSTTY_MODS_CTRL.rawValue }
+        if altLatched { mods |= GHOSTTY_MODS_ALT.rawValue }
+        if shiftLatched { mods |= GHOSTTY_MODS_SHIFT.rawValue }
+        return ghostty_input_mods_e(rawValue: mods)
+    }
+
+    private func clearLatches() {
+        ctrlLatched = false
+        altLatched = false
+        shiftLatched = false
+    }
 
     private lazy var accessoryBar = KeyAccessoryBar(target: self)
 
@@ -29,8 +84,15 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         return Unmanaged<TerminalSurfaceView>.fromOpaque(userdata).takeUnretainedValue()
     }
 
-    init(app: ghostty_app_t, backend: TerminalBackend) {
+    init(
+        app: ghostty_app_t,
+        backend: TerminalBackend,
+        remoteConfig: URL? = nil,
+        columns: Int? = nil
+    ) {
         self.io = SurfaceIO(backend: backend)
+        self.remoteConfig = remoteConfig
+        self.targetColumns = columns
         super.init(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
         backgroundColor = .black
         isMultipleTouchEnabled = true
@@ -57,6 +119,97 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         surface = ghostty_surface_new(app, &config)
 
         installGestures()
+        GhosttyRuntime.shared.register(self)
+        reloadConfig()
+    }
+
+    // MARK: Config
+
+    /// Build this terminal's layered config (defaults, host, app
+    /// settings) and apply it.
+    func reloadConfig() {
+        guard let surface, let built = ConfigBuilder.build(remote: remoteConfig) else { return }
+        ghostty_surface_update_config(surface, built.config)
+        configDiagnostics = built.diagnostics
+
+        configFontPoints = built.float("font-size") ?? configFontPoints
+        if !fontOverridden { fontPoints = configFontPoints }
+        fitColumns(force: true)
+    }
+
+    // MARK: Column fitting
+
+    /// Scale the font so `targetColumns` cells fit across the portrait
+    /// width. Landscape keeps the same font and so shows more columns.
+    func fitColumns(force: Bool = false) {
+        guard let surface, let target = targetColumns, bounds.width > 1, bounds.height > 1 else { return }
+        let scale = Double(window?.screen.scale ?? UIScreen.main.scale)
+        let shortSide = Double(min(bounds.width, bounds.height)) * scale
+        let signature = fitSignature(target: target)
+        guard force || signature != lastFitSignature else { return }
+        lastFitSignature = signature
+
+        let size = ghostty_surface_size(surface)
+        guard size.cell_width_px > 0, size.columns > 0 else { return }
+
+        // First estimate: cell width scales with the font size.
+        let usable = portraitUsableWidth(size, shortSide: shortSide)
+        let targetCell = usable / Double(target)
+        var points = fontPoints * Float(targetCell / Double(size.cell_width_px))
+        points = (points * 4).rounded(.down) / 4
+        applyFontSize(points)
+
+        // Cell widths round to whole pixels, so the estimate can be off by
+        // a step or two. Settle on the largest size that still fits.
+        var steps = 0
+        while portraitColumns(shortSide: shortSide) < target,
+              fontPoints > Self.fontPointRange.lowerBound, steps < 16 {
+            applyFontSize(fontPoints - 0.25)
+            steps += 1
+        }
+        while steps < 16, fontPoints < Self.fontPointRange.upperBound {
+            let fitting = fontPoints
+            applyFontSize(fontPoints + 0.25)
+            steps += 1
+            if portraitColumns(shortSide: shortSide) < target {
+                applyFontSize(fitting)
+                break
+            }
+        }
+    }
+
+    /// Identifies a fit so layout passes that change nothing don't refit.
+    /// Only the short side matters, so rotating doesn't refit.
+    private func fitSignature(target: Int) -> String {
+        let scale = window?.screen.scale ?? UIScreen.main.scale
+        return "\(target)|\(Int(min(bounds.width, bounds.height)))|\(scale)"
+    }
+
+    /// Columns that fit across the portrait width at the current font.
+    func portraitColumns(shortSide: Double? = nil) -> Int {
+        guard let surface else { return 0 }
+        let scale = Double(window?.screen.scale ?? UIScreen.main.scale)
+        let short = shortSide ?? Double(min(bounds.width, bounds.height)) * scale
+        let size = ghostty_surface_size(surface)
+        guard size.cell_width_px > 0 else { return 0 }
+        return Int(portraitUsableWidth(size, shortSide: short) / Double(size.cell_width_px))
+    }
+
+    /// The pixel width available to the grid in portrait. Everything the
+    /// grid doesn't use now (padding plus any partial cell) is treated as
+    /// padding, which is exact in portrait and errs small in landscape.
+    private func portraitUsableWidth(_ size: ghostty_surface_size_s, shortSide: Double) -> Double {
+        let unused = max(0, Double(size.width_px) - Double(size.columns) * Double(size.cell_width_px))
+        return max(Double(size.cell_width_px), shortSide - unused)
+    }
+
+    private func applyFontSize(_ points: Float) {
+        guard let surface else { return }
+        let clamped = min(max(points, Self.fontPointRange.lowerBound), Self.fontPointRange.upperBound)
+        let action = String(format: "set_font_size:%.2f", clamped)
+        ghostty_surface_binding_action(surface, action, UInt(action.utf8.count))
+        fontPoints = clamped
+        fontOverridden = true
     }
 
     required init?(coder: NSCoder) {
@@ -109,7 +262,7 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     }
 
     /// Print a dim status line into the terminal (e.g. connection errors).
-    private func writeNotice(_ message: String) {
+    func writeNotice(_ message: String) {
         guard let surface else { return }
         let text = "\r\n\u{1B}[2m[\(message)]\u{1B}[0m\r\n"
         text.withCString { ghostty_surface_write_output(surface, $0, UInt(strlen($0))) }
@@ -150,6 +303,7 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
             surface,
             UInt32(max(bounds.width * scale, 1)),
             UInt32(max(bounds.height * scale, 1)))
+        fitColumns()
     }
 
     // MARK: Focus
@@ -184,9 +338,8 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
 
     func insertText(_ text: String) {
         guard let surface else { return }
-        KeyInput.type(text, into: surface, ctrl: ctrlLatched, alt: altLatched)
-        ctrlLatched = false
-        altLatched = false
+        KeyInput.type(text, into: surface, ctrl: ctrlLatched, alt: altLatched, shift: shiftLatched)
+        clearLatches()
     }
 
     func deleteBackward() {
@@ -241,16 +394,23 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         switch key {
         case .ctrl: ctrlLatched.toggle()
         case .alt: altLatched.toggle()
-        case .escape: KeyInput.tap(surface, keycode: KeyInput.keycode(.escape))
-        case .tab: KeyInput.tap(surface, keycode: KeyInput.keycode(.tab))
-        case .up: KeyInput.tap(surface, keycode: KeyInput.keycode(.arrowUp))
-        case .down: KeyInput.tap(surface, keycode: KeyInput.keycode(.arrowDown))
-        case .left: KeyInput.tap(surface, keycode: KeyInput.keycode(.arrowLeft))
-        case .right: KeyInput.tap(surface, keycode: KeyInput.keycode(.arrowRight))
+        case .shift: shiftLatched.toggle()
+        case .escape: tapLatched(surface, .escape)
+        case .tab: tapLatched(surface, .tab)
+        case .up: tapLatched(surface, .arrowUp)
+        case .down: tapLatched(surface, .arrowDown)
+        case .left: tapLatched(surface, .arrowLeft)
+        case .right: tapLatched(surface, .arrowRight)
         case .character(let c): insertText(String(c))
         case .paste: paste(nil)
         case .dismiss: _ = resignFirstResponder()
         }
+    }
+
+    /// Tap a special key with any latched modifiers (Shift+Tab, Ctrl+←).
+    private func tapLatched(_ surface: ghostty_surface_t, _ usage: KeyInput.Usage) {
+        KeyInput.tap(surface, keycode: KeyInput.keycode(usage), mods: latchedMods)
+        clearLatches()
     }
 
     // MARK: Gestures
@@ -260,8 +420,11 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         addGestureRecognizer(tap)
 
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
-        pan.maximumNumberOfTouches = 2
+        pan.maximumNumberOfTouches = 1
         addGestureRecognizer(pan)
+
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+        addGestureRecognizer(pinch)
 
         let press = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         addGestureRecognizer(press)
@@ -295,6 +458,30 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
             Double(translation.x) * 2,
             Double(translation.y) * 2,
             precisionBit)
+    }
+
+    /// Pinch to zoom. When the pinch ends, the column count it settled
+    /// on becomes the target so later layouts (and reconnects) keep it.
+    @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            pinchStartPoints = fontPoints
+        case .changed:
+            let points = (pinchStartPoints * Float(gesture.scale) * 4).rounded() / 4
+            if points != fontPoints { applyFontSize(points) }
+        case .ended:
+            let columns = portraitColumns()
+            guard columns > 0 else { return }
+            // Record the result without refitting: the font is already
+            // exactly what the user chose.
+            suppressFit = true
+            targetColumns = columns
+            suppressFit = false
+            lastFitSignature = fitSignature(target: columns)
+            onColumnsSettled?(columns)
+        default:
+            break
+        }
     }
 
     @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {

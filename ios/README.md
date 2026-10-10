@@ -21,7 +21,47 @@ xcodegen generate
 open GhosttyiOS.xcodeproj
 ```
 
-Rebuild the XCFramework whenever the Zig core changes.
+Rebuild the XCFramework whenever the Zig core changes. That build also
+installs Ghostty's themes into `zig-out/share/ghostty/themes`; a build phase
+copies them into the app as `GhosttyResources/themes`.
+
+## Configuration
+
+Each terminal uses a layered Ghostty config. Later layers win:
+
+1. **App defaults:** `Resources/defaults.ghostty`.
+2. **The host's own Ghostty config:** fetched over SSH each time you connect,
+   before the shell opens, and cached per host.
+   - It reads the standard locations (`~/.config/ghostty/config[.ghostty]` and
+     `~/Library/Application Support/com.mitchellh.ghostty/config[.ghostty]`)
+     and follows `config-file` includes.
+   - Custom themes are fetched too.
+   - Options that don't apply on the phone are dropped: `command`,
+     `initial-command`, `working-directory`, keybinds, and `macos-*`/`gtk-*`
+     window options. Settings → Host configs lists what was dropped.
+   - You can turn this off per host.
+3. **Settings:** the app's own `~/.config/ghostty/config.ghostty`.
+   - Settings has quick controls for common options, an **All options** list
+     covering every Ghostty option with its docs, and a raw file editor.
+   - Edits are checked with libghostty before they're saved, and they apply to
+     open terminals immediately.
+
+Fonts the phone doesn't have (e.g. a Mac-only font) fall back to the built-in
+JetBrains Mono.
+
+**Terminal width.** Settings sets how many columns fit across the screen in
+portrait (default 80). The font is scaled to fit, and landscape keeps the same
+font, so it shows more columns. Pinching a terminal sets a custom width for
+that host.
+
+**Option catalog.** `Resources/ConfigCatalog.json` is generated from
+Ghostty's docs. To regenerate it:
+
+```sh
+zig build -Demit-webdata=true -Demit-xcframework=false -Demit-macos-app=false -Dapp-runtime=none --prefix /tmp/webdata
+ghostty +show-config --default > /tmp/defaults.txt
+ios/scripts/gen-config-catalog.py /tmp/webdata/share/ghostty/webdata/config.mdx /tmp/defaults.txt > ios/Resources/ConfigCatalog.json
+```
 
 ## Connect to your Mac
 
@@ -81,8 +121,17 @@ TEST_RUNNER_GHOSTTY_TEST_SSH_KEY_SEED=<hex ed25519 seed> \
 xcodebuild test ...
 ```
 
+To also test the config fetch, add `SetEnv XDG_CONFIG_HOME=<fixture>` to that
+sshd's config. The fixture's `ghostty/config` should set
+`cursor-style = underline` and an `initial-command`, and include
+(`config-file = extra.ghostty`) a file that sets
+`scrollback-limit-lines = 4242`. Then set
+`TEST_RUNNER_GHOSTTY_TEST_SSH_CONFIG_FIXTURE=1`.
+
 `TEST_RUNNER_GHOSTTY_TEST_VISUAL=1` shows sample output full screen for 8
-seconds so you can screenshot it.
+seconds so you can screenshot it. It uses a theme, an 80-column fit, and the
+key bar. `TEST_RUNNER_GHOSTTY_TEST_VISUAL_SETTINGS=1` does the same for the
+Settings screen.
 
 ## Not yet supported
 

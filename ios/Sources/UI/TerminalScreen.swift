@@ -3,6 +3,7 @@ import SwiftUI
 /// Full-screen terminal for one host.
 struct TerminalScreen: View {
     @StateObject private var session: TerminalSession
+    @EnvironmentObject private var store: HostStore
     @Environment(\.dismiss) private var dismiss
     @State private var password = ""
 
@@ -30,7 +31,13 @@ struct TerminalScreen: View {
                 }
             }
         }
-        .task { await session.connect() }
+        .task {
+            let hostID = session.host.id
+            session.onColumnsSettled = { [store] columns in
+                store.setColumns(columns, for: hostID)
+            }
+            await session.connect()
+        }
         .onDisappear { session.disconnect() }
         .alert(
             "Trust this host?",

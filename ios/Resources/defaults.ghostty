@@ -1,0 +1,5 @@
+# Ghostty for iOS defaults. These sit beneath the connected host's
+# config and the app's Settings, so anything set there wins.
+font-size = 12
+window-padding-x = 4
+window-padding-y = 4

@@ -58,6 +58,19 @@ enum KeyInput {
         }
     }
 
+    /// The US-layout shifted form of a character (`a`→`A`, `-`→`_`).
+    /// Characters without one are returned unchanged.
+    static func shifted(_ character: Character) -> Character {
+        if character.isLetter { return Character(character.uppercased()) }
+        let table: [Character: Character] = [
+            "1": "!", "2": "@", "3": "#", "4": "$", "5": "%",
+            "6": "^", "7": "&", "8": "*", "9": "(", "0": ")",
+            "-": "_", "=": "+", "[": "{", "]": "}", "\\": "|",
+            ";": ":", "'": "\"", "`": "~", ",": "<", ".": ">", "/": "?",
+        ]
+        return table[character] ?? character
+    }
+
     static func mods(_ flags: UIKeyModifierFlags) -> ghostty_input_mods_e {
         var mods: UInt32 = GHOSTTY_MODS_NONE.rawValue
         if flags.contains(.shift) { mods |= GHOSTTY_MODS_SHIFT.rawValue }
@@ -123,23 +136,32 @@ enum KeyInput {
     /// Type a string from the software keyboard, one key event per
     /// character so the terminal's key encoding applies (rather than
     /// treating it as a paste).
-    static func type(_ string: String, into surface: ghostty_surface_t, ctrl: Bool, alt: Bool) {
-        for character in string {
+    static func type(
+        _ string: String,
+        into surface: ghostty_surface_t,
+        ctrl: Bool,
+        alt: Bool,
+        shift: Bool = false
+    ) {
+        for original in string {
+            let character = shift ? shifted(original) : original
+            let shiftMods = shift ? GHOSTTY_MODS_SHIFT : GHOSTTY_MODS_NONE
             if character == "\n" || character == "\r" {
-                tap(surface, keycode: keycode(.enter))
+                tap(surface, keycode: keycode(.enter), mods: shiftMods)
                 continue
             }
             if character == "\t" {
-                tap(surface, keycode: keycode(.tab))
+                // Shift+Tab encodes as backtab (CSI Z).
+                tap(surface, keycode: keycode(.tab), mods: shiftMods)
                 continue
             }
 
-            let usage = usage(for: character)
-            let unshifted = character.lowercased().unicodeScalars.first?.value ?? 0
+            let usage = usage(for: original)
+            let unshifted = original.lowercased().unicodeScalars.first?.value ?? 0
             var mods: UInt32 = GHOSTTY_MODS_NONE.rawValue
             if ctrl { mods |= GHOSTTY_MODS_CTRL.rawValue }
             if alt { mods |= GHOSTTY_MODS_ALT.rawValue }
-            if character.isUppercase { mods |= GHOSTTY_MODS_SHIFT.rawValue }
+            if shift || character.isUppercase { mods |= GHOSTTY_MODS_SHIFT.rawValue }
 
             tap(
                 surface,

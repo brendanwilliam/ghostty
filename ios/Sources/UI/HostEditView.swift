@@ -58,6 +58,29 @@ struct HostEditView: View {
                     Text("xterm-ghostty requires Ghostty's terminfo on the server.")
                 }
 
+                Section {
+                    Toggle("Use this host's Ghostty config", isOn: $host.usesRemoteConfig)
+                    Toggle("Custom width", isOn: Binding(
+                        get: { host.columns != nil },
+                        set: { host.columns = $0 ? (AppSettings.defaultColumns ?? 80) : nil }))
+                    if let columns = host.columns {
+                        Stepper(value: Binding(
+                            get: { columns },
+                            set: { host.columns = $0 }),
+                            in: AppSettings.columnRange, step: 5) {
+                            HStack {
+                                Text("Columns")
+                                Spacer()
+                                Text("\(columns)").monospacedDigit().foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Appearance")
+                } footer: {
+                    Text("The host's config (theme, font, colors) is fetched on each connect; Settings override it. Without a custom width, the width from Settings is used. Pinching a terminal sets a custom width.")
+                }
+
                 if let knownFingerprint {
                     Section("Host key") {
                         Text(knownFingerprint)
