@@ -4,7 +4,7 @@ import GhosttyKit
 /// A UIView hosting a libghostty terminal surface whose IO is provided by
 /// a `TerminalBackend` (via libghostty's manual IO mode) instead of a
 /// local subprocess.
-final class TerminalSurfaceView: UIView, UIKeyInput {
+final class TerminalSurfaceView: UIView {
     private(set) var surface: ghostty_surface_t?
 
     /// Connects libghostty's IO callbacks to the backend. Immutable so it
@@ -90,6 +90,19 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     private lazy var momentum = MomentumScroller { [weak self] delta, phase in
         self?.momentumScrolled(delta, phase)
     }
+    /// Text the keyboard is still composing (dictation, or an input
+    /// method's marked text). It's drawn at the cursor as a preedit and
+    /// only sent to the program once it's final. See TerminalTextInput.swift.
+    var composing = ""
+    /// The caret within `composing`, in UTF-16 units.
+    var composingCaret = 0
+    /// The input method's marked (provisional) part of `composing`.
+    var composingMarked: NSRange?
+    /// Whether dictation is running, so its text is held until it ends.
+    var dictating = false
+    weak var inputDelegate: UITextInputDelegate?
+    lazy var tokenizer: UITextInputTokenizer = UITextInputStringTokenizer(textInput: self)
+
     /// Whether the program had the mouse when the glide started. A glide
     /// stops if that changes so it doesn't carry into another program.
     private var momentumCaptured = false
@@ -142,6 +155,9 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         surface = ghostty_surface_new(app, &config)
 
         installGestures()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(inputModeDidChange),
+            name: UITextInputMode.currentInputModeDidChangeNotification, object: nil)
         GhosttyRuntime.shared.register(self)
         reloadConfig()
     }
@@ -336,11 +352,14 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
 
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
-        if result, let surface { ghostty_surface_set_focus(surface, true) }
+        if result, let surface {
+            ghostty_surface_set_focus(surface, true)
+        }
         return result
     }
 
     override func resignFirstResponder() -> Bool {
+        commitComposing()
         let result = super.resignFirstResponder()
         if result, let surface { ghostty_surface_set_focus(surface, false) }
         return result
@@ -348,26 +367,29 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
 
     override var inputAccessoryView: UIView? { accessoryBar }
 
-    // MARK: UIKeyInput (software keyboard)
+    // MARK: Software keyboard
 
-    var hasText: Bool { true }
-
+    // A terminal wants exactly what was typed. The default keyboard (not
+    // ASCII-only) is used so the dictation key is offered.
     var autocorrectionType: UITextAutocorrectionType { get { .no } set {} }
     var autocapitalizationType: UITextAutocapitalizationType { get { .none } set {} }
     var smartQuotesType: UITextSmartQuotesType { get { .no } set {} }
     var smartDashesType: UITextSmartDashesType { get { .no } set {} }
     var smartInsertDeleteType: UITextSmartInsertDeleteType { get { .no } set {} }
     var spellCheckingType: UITextSpellCheckingType { get { .no } set {} }
-    var keyboardType: UIKeyboardType { get { .asciiCapable } set {} }
+    var inlinePredictionType: UITextInlinePredictionType { get { .no } set {} }
+    var keyboardType: UIKeyboardType { get { .default } set {} }
 
-    func insertText(_ text: String) {
-        guard let surface else { return }
+    /// Send typed text to the program, with any latched modifiers.
+    func typeText(_ text: String) {
+        guard let surface, !text.isEmpty else { return }
         momentum.stop()
         KeyInput.type(text, into: surface, ctrl: ctrlLatched, alt: altLatched, shift: shiftLatched)
         clearLatches()
     }
 
-    func deleteBackward() {
+    /// Send a Backspace to the program.
+    func typeBackspace() {
         guard let surface else { return }
         KeyInput.tap(surface, keycode: KeyInput.keycode(.backspace))
     }
@@ -399,6 +421,7 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     private func handlePress(_ press: UIPress, action: ghostty_input_action_e) -> Bool {
         guard let surface, let key = press.key else { return false }
         momentum.stop()
+        commitComposing()
         let unshifted = key.charactersIgnoringModifiers.unicodeScalars.first?.value ?? 0
         let handled = KeyInput.send(
             to: surface,
@@ -435,6 +458,7 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
 
     /// Tap a special key with any latched modifiers (Shift+Tab, Ctrl+←).
     private func tapLatched(_ surface: ghostty_surface_t, _ usage: KeyInput.Usage) {
+        commitComposing()
         KeyInput.tap(surface, keycode: KeyInput.keycode(usage), mods: latchedMods)
         clearLatches()
     }
@@ -503,6 +527,7 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     func touchTap(at point: CGPoint) {
         guard let surface else { return }
         momentum.stop()
+        commitComposing()
         if mouseCaptured {
             ghostty_surface_mouse_pos(surface, point.x, point.y, GHOSTTY_MODS_NONE)
             ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
