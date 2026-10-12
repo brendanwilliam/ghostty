@@ -36,16 +36,46 @@ extension TerminalSurfaceView: UITextInput {
     /// so tells iOS the text changed underneath it, which ends dictation.
     private func sync() {
         if !holding {
-            let old = Array(composingSent), new = Array(composing)
+            let old = Array(composingSent), new = Array(sendable)
             var common = 0
             while common < old.count, common < new.count, old[common] == new[common] { common += 1 }
             for _ in common..<old.count { typeBackspace() }
-            typeText(String(new[common...]), latched: false)
-            composingSent = composing
+            let lines = String(new[common...]).split(separator: "\n", omittingEmptySubsequences: false)
+            for (index, line) in lines.enumerated() {
+                if index > 0 { pasteLineBreak() }
+                typeText(String(line), latched: false)
+            }
+            composingSent = String(new)
             // Programs like vim rarely see a Return; don't grow forever.
             if (composing as NSString).length > Self.documentLimit { resetDocument() }
         }
         updatePreedit()
+    }
+
+    /// The document as the program gets it. A dictated line break must
+    /// never act as Return (which would send the message or run the
+    /// command), so it's only kept when it can be pasted as a newline:
+    /// when the program uses bracketed paste (Claude Code, zsh, fish).
+    /// Otherwise it's dropped. Return on the keyboard is sent separately
+    /// (`insertText`).
+    private var sendable: String {
+        let keepsLineBreaks = surface.map { ghostty_surface_bracketed_paste($0) } ?? false
+        var text = ""
+        for character in composing {
+            if character == "\n" || character == "\r" || character == "\r\n" {
+                if keepsLineBreaks { text.append("\n") }
+            } else {
+                text.append(character)
+            }
+        }
+        return text
+    }
+
+    /// Send a line break as pasted text, so a bracketed-paste program
+    /// inserts it instead of submitting.
+    private func pasteLineBreak() {
+        guard let surface else { return }
+        ghostty_surface_text(surface, "\n", 1)
     }
 
     /// Past this many UTF-16 units of settled text, the document restarts.
@@ -77,10 +107,11 @@ extension TerminalSurfaceView: UITextInput {
     /// The provisional text (what hasn't been sent), drawn at the cursor.
     private func updatePreedit() {
         guard let surface else { return }
-        let sent = Array(composingSent), all = Array(composing)
+        let sent = Array(composingSent), all = Array(sendable)
         var common = 0
         while common < sent.count, common < all.count, sent[common] == all[common] { common += 1 }
-        let pending = String(all[common...])
+        // Line breaks can't be drawn in the preedit; show a return symbol.
+        let pending = String(all[common...]).replacingOccurrences(of: "\n", with: "⏎")
         pending.withCString { ghostty_surface_preedit(surface, $0, UInt(strlen($0))) }
     }
 
@@ -193,7 +224,14 @@ extension TerminalSurfaceView: UITextInput {
 
     func insertDictationResult(_ dictationResult: [UIDictationPhrase]) {
         trace("insertDictationResult \(dictationResult.map(\.text))")
-        edit(NSRange(location: composingCaret, length: 0), with: dictationResult.map(\.text).joined())
+        finishDictation(inserting: dictationResult.map(\.text).joined())
+    }
+
+    /// Dictation's final text arrived: insert it and send the document.
+    /// iOS clears what it streamed before inserting the result, so the
+    /// document usually ends up as it was and nothing new is sent.
+    func finishDictation(inserting text: String) {
+        edit(NSRange(location: composingCaret, length: 0), with: text)
         dictating = false
         sync()
     }
@@ -205,6 +243,13 @@ extension TerminalSurfaceView: UITextInput {
 
     func dictationRecordingDidEnd() {
         trace("dictationRecordingDidEnd")
+        // The result normally follows at once; don't hold text forever if
+        // it doesn't.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, self.dictating else { return }
+            self.dictating = false
+            self.sync()
+        }
     }
 
     func dictationRecognitionFailed() {
@@ -247,6 +292,10 @@ extension TerminalSurfaceView: UITextInput {
         trace("replace(\(nsRange(range).map { "\($0)" } ?? "?"), \(text.debugDescription))")
         noteInputMode()
         guard let r = nsRange(range) else { return }
+        // Typing only inserts and deletes; rewriting text in place is
+        // dictation streaming its guess (iOS 26 sends no other signal).
+        // Hold it until the final result.
+        dictating = true
         edit(r, with: text)
         sync()
     }

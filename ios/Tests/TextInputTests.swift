@@ -84,11 +84,55 @@ final class TextInputTests: XCTestCase {
         XCTAssertTrue(more, "wrote \(written.debugDescription)")
     }
 
+    /// Replays the calls iOS 26 made on an iPhone while dictating "The
+    /// quick brown fox." (from the text-input trace): no dictation mode,
+    /// no marked text, just in-place rewrites, a trailing "\n\n" after a
+    /// pause, then everything cleared and the result inserted again.
+    func testInPlaceDictationIsHeldSentOnceAndNeverRuns() async throws {
+        view.insertText(" Th")
+        _ = await waitUntil { self.written == " Th" }
+        view.replace(range(0, 3), withText: " The ")
+        view.replace(range(0, 5), withText: " The quick brown")
+        view.replace(range(0, 16), withText: " The quick brown fox")
+        view.replace(range(0, 20), withText: " The quick brown fox.")
+        view.replace(range(0, 21), withText: " The quick brown fox.\n\n")
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(written, " Th", "dictation's guesses are held")
+
+        view.dictationRecordingDidEnd()
+        view.insertText("          ")
+        view.replace(range(23, 33), withText: "")
+        view.replace(range(0, 23), withText: "")
+        view.insertText(" ")
+        view.finishDictation(inserting: "The quick brown fox.\n\n")
+        let sent = await waitUntil { self.written == " The quick brown fox." }
+        XCTAssertTrue(sent, "wrote \(written.debugDescription)")
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(written, " The quick brown fox.", "no Return, no backspaces, nothing sent twice")
+        XCTAssertEqual(delegate.textChanges, 0)
+    }
+
+    func testDictatedLineBreakIsPastedWhenTheProgramUsesBracketedPaste() async throws {
+        // The program (Claude Code, zsh) turns on bracketed paste.
+        backend.continuation.yield(.output(Data("\u{1B}[?2004h".utf8)))
+        let surface = try XCTUnwrap(view.surface)
+        let enabled = await waitUntil { ghostty_surface_bracketed_paste(surface) }
+        XCTAssertTrue(enabled)
+
+        view.insertText("one")
+        view.replace(range(0, 3), withText: "one\ntwo")
+        view.finishDictation(inserting: "")
+        let sent = await waitUntil { self.written.hasSuffix("two") }
+        XCTAssertTrue(sent, "wrote \(written.debugDescription)")
+        XCTAssertEqual(written, "one\u{1B}[200~\n\u{1B}[201~two", "a pasted newline, not Return")
+    }
+
     func testRevisingSentTextSendsTheDifference() async throws {
         view.insertText("hello wrld")
         _ = await waitUntil { self.written == "hello wrld" }
         // Dictation corrects a word it already finalized.
         view.replace(range(6, 10), withText: "world")
+        view.finishDictation(inserting: "")
         let fixed = await waitUntil { self.written == "hello wrld\u{7F}\u{7F}\u{7F}orld" }
         XCTAssertTrue(fixed, "wrote \(written.debugDescription)")
         XCTAssertEqual(document, "hello world")

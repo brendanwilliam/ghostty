@@ -100,6 +100,11 @@ dictation ends, when you type another key, or when you press Return (which
 then runs it). Input methods that compose text (Japanese, Chinese) work the
 same way.
 
+Dictation never presses Return. A dictated new line is sent as a pasted
+newline when the program uses bracketed paste (Claude Code, zsh, fish), so it
+adds a line instead of sending the message or running the command. Elsewhere
+it's dropped.
+
 ## Tabs and splits
 
 Each tab or split is another shell on the same host, over its own SSH
