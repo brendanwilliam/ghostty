@@ -121,8 +121,11 @@ final class TextInputTests: XCTestCase {
         view.dictationRecordingDidEnd()
         view.insertText("          ")
         view.replace(range(0, 10), withText: "")
+        // ...and the leftover "\n" result isn't a blank line in the next prompt.
+        view.finishDictation(inserting: "\n")
         try await Task.sleep(nanoseconds: 2_300_000_000)
         XCTAssertEqual(written, " The quick brown fox.\r")
+        XCTAssertEqual(document, "")
     }
 
     func testDictatedLineBreakIsPastedWhenTheProgramUsesBracketedPaste() async throws {

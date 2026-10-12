@@ -247,7 +247,12 @@ extension TerminalSurfaceView: UITextInput {
     /// iOS clears what it streamed before inserting the result, so the
     /// document usually ends up as it was and nothing new is sent.
     func finishDictation(inserting text: String) {
-        edit(NSRange(location: composingCaret, length: 0), with: text)
+        // Pressing Return mid-dictation sends the text, then iOS delivers
+        // a leftover "\n" result; it would be a blank line in the next prompt.
+        let leftover = composing.isEmpty && text.allSatisfy(\.isWhitespace)
+        if !leftover {
+            edit(NSRange(location: composingCaret, length: 0), with: text)
+        }
         dictating = false
         sync()
     }
