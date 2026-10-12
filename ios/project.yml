@@ -24,6 +24,10 @@ targets:
       - Sources
       - path: Resources
         buildPhase: resources
+      # Ghostty's official icon (Icon Composer), shared with the macOS app.
+      - path: ../images/Ghostty.icon
+        type: file
+        buildPhase: resources
     postCompileScripts:
       # Ghostty's themes come from its build (zig-out/share/ghostty/themes)
       # and are bundled as <app>/GhosttyResources/themes, libghostty's resources dir.
@@ -49,6 +53,7 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Config/Info.plist
         TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: Ghostty
         OTHER_LDFLAGS: "-lstdc++"
         # The theme copy script reads from ../zig-out.
         ENABLE_USER_SCRIPT_SANDBOXING: NO
