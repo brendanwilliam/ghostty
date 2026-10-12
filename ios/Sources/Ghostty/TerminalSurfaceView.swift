@@ -126,12 +126,15 @@ final class TerminalSurfaceView: UIView {
     private lazy var momentum = MomentumScroller { [weak self] delta, phase in
         self?.momentumScrolled(delta, phase)
     }
-    /// Text the keyboard is still composing (dictation, or an input
-    /// method's marked text). It's drawn at the cursor as a preedit and
-    /// only sent to the program once it's final. See TerminalTextInput.swift.
+    /// The keyboard's view of the text since the last Return (or tap, or
+    /// special key). Provisional parts (dictation, an input method's
+    /// marked text) are drawn at the cursor and only sent once final.
+    /// See TerminalTextInput.swift.
     var composing = ""
     /// The caret within `composing`, in UTF-16 units.
     var composingCaret = 0
+    /// How much of `composing` the program has been sent.
+    var composingSent = ""
     /// The input method's marked (provisional) part of `composing`.
     var composingMarked: NSRange?
     /// Whether dictation is running, so its text is held until it ends.

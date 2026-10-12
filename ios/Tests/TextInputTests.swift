@@ -2,13 +2,27 @@ import GhosttyKit
 import XCTest
 @testable import GhosttyiOS
 
+/// Records the change notifications the terminal sends the keyboard.
+private final class RecordingInputDelegate: NSObject, UITextInputDelegate {
+    var textChanges = 0
+    var selectionChanges = 0
+    func selectionWillChange(_ textInput: UITextInput?) {}
+    func selectionDidChange(_ textInput: UITextInput?) { selectionChanges += 1 }
+    func textWillChange(_ textInput: UITextInput?) {}
+    func textDidChange(_ textInput: UITextInput?) { textChanges += 1 }
+    @available(iOS 18.4, *)
+    func conversationContext(_ context: UIConversationContext?, didChange textInput: UITextInput?) {}
+}
+
 /// Dictation and input methods: provisional text is shown but only sent
-/// once it's final, because the terminal can't take bytes back.
+/// once it's final, and the keyboard's own edits never look like outside
+/// changes (which would end dictation).
 @MainActor
 final class TextInputTests: XCTestCase {
     private var view: TerminalSurfaceView!
     private var backend: FakeBackend!
     private var run: Task<Void, Never>?
+    private let delegate = RecordingInputDelegate()
 
     override func setUp() async throws {
         let app = try XCTUnwrap(GhosttyRuntime.shared.app)
@@ -16,6 +30,7 @@ final class TextInputTests: XCTestCase {
         view = TerminalSurfaceView(app: app, backend: backend)
         view.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
         view.layoutIfNeeded()
+        view.inputDelegate = delegate
         let view = view!
         run = Task { await view.run() }
     }
@@ -38,37 +53,60 @@ final class TextInputTests: XCTestCase {
                        to: view.position(from: view.beginningOfDocument, offset: b)!)!
     }
 
+    private var document: String { view.text(in: range(0, (view.endOfDocument as! TextOffset).offset)) ?? "" }
+
     func testTypingIsSentImmediately() async throws {
-        view.insertText("ls")
+        view.insertText("l")
+        view.insertText("s")
         let sent = await waitUntil { self.written == "ls" }
         XCTAssertTrue(sent, "wrote \(written.debugDescription)")
-        XCTAssertEqual(view.text(in: range(0, 0)), "")
+        XCTAssertEqual(document, "ls", "the keyboard sees what was typed")
+        XCTAssertEqual(delegate.textChanges, 0)
     }
 
-    func testMarkedTextIsSentOnceWhenUnmarked() async throws {
-        view.setMarkedText("hel", selectedRange: NSRange(location: 3, length: 0))
-        view.setMarkedText("hello", selectedRange: NSRange(location: 5, length: 0))
-        try await assertNothingSent()
-        XCTAssertNotNil(view.markedTextRange)
+    func testStreamingDictationIsHeldUntilFinal() async throws {
+        // How dictation streams: a growing provisional guess.
+        view.setMarkedText(" Th", selectedRange: NSRange(location: 3, length: 0))
+        view.setMarkedText(" The quick", selectedRange: NSRange(location: 10, length: 0))
+        view.setMarkedText(" The quick brown fox", selectedRange: NSRange(location: 20, length: 0))
+        try await assertNothingSent("provisional dictation reached the program")
+        XCTAssertEqual(delegate.textChanges, 0, "telling the keyboard about its own edits ends dictation")
 
         view.unmarkText()
-        let sent = await waitUntil { self.written == "hello" }
+        let sent = await waitUntil { self.written == " The quick brown fox" }
         XCTAssertTrue(sent, "wrote \(written.debugDescription)")
-        XCTAssertNil(view.markedTextRange)
+        XCTAssertEqual(delegate.textChanges, 0)
+
+        // Dictation keeps going after a pause.
+        view.setMarkedText(" jumps", selectedRange: NSRange(location: 6, length: 0))
+        view.unmarkText()
+        let more = await waitUntil { self.written == " The quick brown fox jumps" }
+        XCTAssertTrue(more, "wrote \(written.debugDescription)")
     }
 
-    func testDictationIsHeldWhileItRevisesItself() async throws {
-        // Speech arrives, then dictation revises an earlier word.
-        view.insertText("echo hello", alternatives: [], style: .none)
-        view.insertText(" world", alternatives: [], style: .none)
-        XCTAssertEqual(view.text(in: range(0, 16)), "echo hello world")
+    func testRevisingSentTextSendsTheDifference() async throws {
+        view.insertText("hello wrld")
+        _ = await waitUntil { self.written == "hello wrld" }
+        // Dictation corrects a word it already finalized.
+        view.replace(range(6, 10), withText: "world")
+        let fixed = await waitUntil { self.written == "hello wrld\u{7F}\u{7F}\u{7F}orld" }
+        XCTAssertTrue(fixed, "wrote \(written.debugDescription)")
+        XCTAssertEqual(document, "hello world")
+    }
+
+    func testDictationModeHoldsInsertedText() async throws {
+        // Older dictation: a placeholder, then plain inserts and revisions.
+        _ = view.insertDictationResultPlaceholder()
+        view.insertText("echo hello")
+        view.insertText(" world")
         view.replace(range(5, 10), withText: "Hello")
         try await assertNothingSent("dictation must not reach the program early")
 
-        // Pressing return sends the final text, then runs it.
+        // Return sends the final text, then runs it.
         view.insertText("\n")
         let sent = await waitUntil { self.written == "echo Hello world\r" }
         XCTAssertTrue(sent, "wrote \(written.debugDescription)")
+        XCTAssertEqual(document, "", "a new line starts a new document")
 
         // Typing afterwards goes straight through again.
         view.insertText("x")
@@ -93,17 +131,26 @@ final class TextInputTests: XCTestCase {
         let sent = await waitUntil { self.written == "ab" }
         XCTAssertTrue(sent, "wrote \(written.debugDescription)")
 
-        // With nothing composed, backspace goes to the program.
+        // Deleting sent text backspaces in the program.
         view.deleteBackward()
         let deleted = await waitUntil { self.written == "ab\u{7F}" }
         XCTAssertTrue(deleted, "wrote \(written.debugDescription)")
+
+        // With an empty document, backspace still reaches the program.
+        view.commitComposing()
+        view.deleteBackward()
+        let again = await waitUntil { self.written == "ab\u{7F}\u{7F}" }
+        XCTAssertTrue(again, "wrote \(written.debugDescription)")
     }
 
-    func testResigningCommitsDictation() async throws {
-        view.insertText("pending", alternatives: [], style: .none)
+    func testCommittingSendsHeldTextAndResets() async throws {
+        _ = view.insertDictationResultPlaceholder()
+        view.insertText("pending")
         try await assertNothingSent()
         view.commitComposing()
         let sent = await waitUntil { self.written == "pending" }
         XCTAssertTrue(sent, "wrote \(written.debugDescription)")
+        XCTAssertEqual(document, "")
+        XCTAssertEqual(delegate.textChanges, 1, "the app's own reset is announced")
     }
 }
