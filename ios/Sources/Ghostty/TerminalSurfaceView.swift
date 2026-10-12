@@ -92,21 +92,27 @@ final class TerminalSurfaceView: UIView {
     /// Software modifier state toggled from the accessory bar. These
     /// apply to the next typed character and then reset.
     private var ctrlLatched = false { didSet { accessoryBar.setCtrl(ctrlLatched) } }
-    private var altLatched = false { didSet { accessoryBar.setAlt(altLatched) } }
+    private var optionLatched = false { didSet { accessoryBar.setOption(optionLatched) } }
+    private var commandLatched = false { didSet { accessoryBar.setCommand(commandLatched) } }
     private var shiftLatched = false { didSet { accessoryBar.setShift(shiftLatched) } }
 
     /// Modifiers latched on the accessory bar, as libghostty mods.
     private var latchedMods: ghostty_input_mods_e {
         var mods = GHOSTTY_MODS_NONE.rawValue
         if ctrlLatched { mods |= GHOSTTY_MODS_CTRL.rawValue }
-        if altLatched { mods |= GHOSTTY_MODS_ALT.rawValue }
+        if optionLatched { mods |= GHOSTTY_MODS_ALT.rawValue }
+        if commandLatched { mods |= GHOSTTY_MODS_SUPER.rawValue }
         if shiftLatched { mods |= GHOSTTY_MODS_SHIFT.rawValue }
         return ghostty_input_mods_e(rawValue: mods)
     }
 
+    /// Whether an accessory bar modifier is waiting for the next key.
+    var hasLatchedModifier: Bool { latchedMods != GHOSTTY_MODS_NONE }
+
     private func clearLatches() {
         ctrlLatched = false
-        altLatched = false
+        optionLatched = false
+        commandLatched = false
         shiftLatched = false
     }
 
@@ -423,11 +429,17 @@ final class TerminalSurfaceView: UIView {
     var inlinePredictionType: UITextInlinePredictionType { get { .no } set {} }
     var keyboardType: UIKeyboardType { get { .default } set {} }
 
-    /// Send typed text to the program, with any latched modifiers.
-    func typeText(_ text: String) {
+    /// Send typed text to the program, with any latched modifiers unless
+    /// `latched` is false (text the keyboard composed earlier).
+    func typeText(_ text: String, latched: Bool = true) {
         guard let surface, !text.isEmpty else { return }
         momentum.stop()
-        KeyInput.type(text, into: surface, ctrl: ctrlLatched, alt: altLatched, shift: shiftLatched)
+        guard latched else {
+            KeyInput.type(text, into: surface, ctrl: false, alt: false)
+            return
+        }
+        KeyInput.type(text, into: surface, ctrl: ctrlLatched, alt: optionLatched,
+                      command: commandLatched, shift: shiftLatched)
         clearLatches()
     }
 
@@ -485,7 +497,8 @@ final class TerminalSurfaceView: UIView {
         guard let surface else { return }
         switch key {
         case .ctrl: ctrlLatched.toggle()
-        case .alt: altLatched.toggle()
+        case .option: optionLatched.toggle()
+        case .command: commandLatched.toggle()
         case .shift: shiftLatched.toggle()
         case .escape: tapLatched(surface, .escape)
         case .tab: tapLatched(surface, .tab)
@@ -494,13 +507,12 @@ final class TerminalSurfaceView: UIView {
         case .left: tapLatched(surface, .arrowLeft)
         case .right: tapLatched(surface, .arrowRight)
         case .character(let c): insertText(String(c))
-        case .paste: paste(nil)
         case .dismiss: _ = resignFirstResponder()
         }
     }
 
     /// Tap a special key with any latched modifiers (Shift+Tab, Ctrl+←).
-    private func tapLatched(_ surface: ghostty_surface_t, _ usage: KeyInput.Usage) {
+    func tapLatched(_ surface: ghostty_surface_t, _ usage: KeyInput.Usage) {
         commitComposing()
         KeyInput.tap(surface, keycode: KeyInput.keycode(usage), mods: latchedMods)
         clearLatches()

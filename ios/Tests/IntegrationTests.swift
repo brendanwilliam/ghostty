@@ -153,6 +153,42 @@ final class SurfaceFeatureTests: XCTestCase {
         backend.continuation.finish()
         _ = await run.value
     }
+
+    func testBarModifiersMakeShortcutsFromTheSoftwareKeyboard() async throws {
+        let (view, backend) = try makeView(columns: nil)
+        let run = Task { await view.run() }
+        defer { backend.continuation.finish() }
+        var actions: [PaneAction] = []
+        view.onAction = { actions.append($0); return true }
+        var written: String { String(decoding: backend.written, as: UTF8.self) }
+
+        // Cmd+T is Ghostty's new tab, and types nothing.
+        view.accessoryTapped(.command)
+        view.insertText("t")
+        XCTAssertEqual(actions, [.newTab])
+
+        // Command is one-shot.
+        view.insertText("t")
+        let typed = await waitUntil { written == "t" }
+        XCTAssertTrue(typed, "wrote \(written.debugDescription)")
+
+        // Option+Backspace sends ESC DEL (delete word), not a plain backspace.
+        view.accessoryTapped(.option)
+        view.deleteBackward()
+        let word = await waitUntil { written == "t\u{1B}\u{7F}" }
+        XCTAssertTrue(word, "wrote \(written.debugDescription)")
+
+        // Ctrl+C from the keyboard is ^C, and isn't left in the document
+        // for a later backspace to "delete".
+        view.accessoryTapped(.ctrl)
+        view.insertText("c")
+        view.deleteBackward()
+        let interrupt = await waitUntil { written == "t\u{1B}\u{7F}\u{03}\u{7F}" }
+        XCTAssertTrue(interrupt, "wrote \(written.debugDescription)")
+
+        backend.continuation.finish()
+        _ = await run.value
+    }
 }
 
 /// Touches become mouse events for programs that track the mouse (Claude

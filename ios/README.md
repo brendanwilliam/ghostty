@@ -80,6 +80,17 @@ events. libghostty encodes them in whatever format the program asked for.
 
 Setting `mouse-reporting = false` in Settings turns this off.
 
+## Key bar
+
+The row above the keyboard has Escape, Control, Option, Command, Shift, and
+Tab (shown with their Apple keyboard symbols), arrows, and a few symbols. The
+row scrolls; the hide-keyboard key stays pinned at its right edge.
+
+Control, Option, Command, and Shift latch: tap one, then the next key you type
+gets it. Command makes Ghostty's shortcuts reachable without a hardware
+keyboard (Cmd+T new tab, Cmd+D split, Cmd+V paste, Cmd+K clear). Option+Backspace
+deletes a word.
+
 ## Dictation
 
 The keyboard's microphone key works. While you speak, the words show
@@ -106,6 +117,9 @@ your Mac config's `keybind` lines aren't imported).
   across the full screen) and show however many columns fit.
 - `exit` closes just that pane; closing the last tab goes back to the host
   list. A dropped connection leaves the pane open with **Reconnect**.
+- Going back to the host list (or anywhere else in the app) leaves a host's tabs
+  running; the host shows "2 tabs open", and opening it returns to them. Swipe
+  the host and tap **Disconnect** to end them all.
 
 ## Connect to your Mac
 

@@ -40,7 +40,7 @@ extension TerminalSurfaceView: UITextInput {
             var common = 0
             while common < old.count, common < new.count, old[common] == new[common] { common += 1 }
             for _ in common..<old.count { typeBackspace() }
-            typeText(String(new[common...]))
+            typeText(String(new[common...]), latched: false)
             composingSent = composing
             // Programs like vim rarely see a Return; don't grow forever.
             if (composing as NSString).length > Self.documentLimit { resetDocument() }
@@ -107,8 +107,9 @@ extension TerminalSurfaceView: UITextInput {
     func insertText(_ text: String) {
         trace("insertText \(text.debugDescription)")
         noteInputMode()
-        if text == "\n" {
-            // Return sends whatever is composed, then runs it.
+        if text == "\n" || hasLatchedModifier {
+            // Return sends whatever is composed, then runs it. A key with
+            // a bar modifier (Ctrl+C, Cmd+T) is a shortcut, not text.
             commitComposing()
             typeText(text)
             return
@@ -122,6 +123,12 @@ extension TerminalSurfaceView: UITextInput {
     func deleteBackward() {
         trace("deleteBackward")
         noteInputMode()
+        if hasLatchedModifier, let surface {
+            // Option+Backspace deletes a word, Cmd+Backspace the line.
+            commitComposing()
+            tapLatched(surface, .backspace)
+            return
+        }
         guard composingCaret > 0 else {
             // Nothing of ours to delete: it's a Backspace for the program.
             typeBackspace()

@@ -1,21 +1,13 @@
 import SwiftUI
 
 /// The terminal screen for one host: its tabs, each holding one or more
-/// split panes.
+/// split panes. The workspace outlives the screen (see WorkspaceStore), so
+/// leaving and coming back finds the same sessions.
 struct TerminalScreen: View {
-    @StateObject private var workspace: TerminalWorkspace
+    @ObservedObject var workspace: TerminalWorkspace
     @EnvironmentObject private var store: HostStore
     @Environment(\.dismiss) private var dismiss
     @State private var password = ""
-
-    init(host: Host) {
-        _workspace = StateObject(wrappedValue: TerminalWorkspace(host: host))
-    }
-
-    /// Show an existing workspace (tests use one without SSH).
-    init(workspace: TerminalWorkspace) {
-        _workspace = StateObject(wrappedValue: workspace)
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,7 +50,6 @@ struct TerminalScreen: View {
             }
             workspace.start()
         }
-        .onDisappear { workspace.disconnectAll() }
         .onChange(of: workspace.closed) { _, closed in
             if closed { dismiss() }
         }

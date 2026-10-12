@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct GhosttyApp: App {
     @StateObject private var hosts = HostStore()
+    @StateObject private var workspaces = WorkspaceStore()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -14,6 +15,7 @@ struct GhosttyApp: App {
         WindowGroup {
             HostListView()
                 .environmentObject(hosts)
+                .environmentObject(workspaces)
         }
         .onChange(of: scenePhase) { _, phase in
             GhosttyRuntime.shared.setFocus(phase == .active)
