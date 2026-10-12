@@ -6,7 +6,7 @@ import XCTest
 
 /// A backend that records what the terminal writes and lets the test
 /// feed output.
-private final class FakeBackend: TerminalBackend, @unchecked Sendable {
+final class FakeBackend: TerminalBackend, @unchecked Sendable {
     let events: AsyncStream<TerminalBackendEvent>
     let continuation: AsyncStream<TerminalBackendEvent>.Continuation
     private let lock = NSLock()
@@ -28,7 +28,7 @@ private final class FakeBackend: TerminalBackend, @unchecked Sendable {
 
 /// Wait (without blocking the main run loop) until `condition` holds.
 @MainActor
-private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async -> Bool {
+func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async -> Bool {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
         if condition() { return true }

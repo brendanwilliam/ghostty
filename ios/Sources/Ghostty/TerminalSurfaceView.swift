@@ -86,6 +86,14 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     /// the mouse, so libghostty selects text instead of reporting it.
     private var longPressMods = GHOSTTY_MODS_NONE
 
+    /// Keeps a flicked scroll going after the finger lifts.
+    private lazy var momentum = MomentumScroller { [weak self] delta, phase in
+        self?.momentumScrolled(delta, phase)
+    }
+    /// Whether the program had the mouse when the glide started. A glide
+    /// stops if that changes so it doesn't carry into another program.
+    private var momentumCaptured = false
+
     /// Whether the running program has turned on mouse tracking (e.g.
     /// Claude Code's fullscreen TUI, vim with `mouse=a`, htop). Touches
     /// are then sent to it as mouse events.
@@ -354,6 +362,7 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
 
     func insertText(_ text: String) {
         guard let surface else { return }
+        momentum.stop()
         KeyInput.type(text, into: surface, ctrl: ctrlLatched, alt: altLatched, shift: shiftLatched)
         clearLatches()
     }
@@ -389,6 +398,7 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
 
     private func handlePress(_ press: UIPress, action: ghostty_input_action_e) -> Bool {
         guard let surface, let key = press.key else { return false }
+        momentum.stop()
         let unshifted = key.charactersIgnoringModifiers.unicodeScalars.first?.value ?? 0
         let handled = KeyInput.send(
             to: surface,
@@ -472,6 +482,14 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         let translation = gesture.translation(in: self)
         gesture.setTranslation(.zero, in: self)
         touchScroll(by: translation, at: gesture.location(in: self), began: gesture.state == .began)
+        switch gesture.state {
+        case .ended:
+            touchScrollEnded(velocity: CGPoint(x: 0, y: gesture.velocity(in: self).y))
+        case .cancelled, .failed:
+            momentum.stop()
+        default:
+            break
+        }
     }
 
     @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
@@ -484,6 +502,7 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     /// it focuses the terminal or clears the selection.
     func touchTap(at point: CGPoint) {
         guard let surface else { return }
+        momentum.stop()
         if mouseCaptured {
             ghostty_surface_mouse_pos(surface, point.x, point.y, GHOSTTY_MODS_NONE)
             ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
@@ -510,16 +529,44 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         guard let surface else { return }
         // Wheel reports carry the pointer position.
         if began {
+            momentum.stop()
             ghostty_surface_mouse_pos(surface, point.x, point.y, GHOSTTY_MODS_NONE)
         }
+        sendScroll(translation, phase: GHOSTTY_MOUSE_MOMENTUM_NONE)
+    }
 
-        // Precision scrolling in points, scaled like the macOS trackpad path.
+    /// The finger lifted: keep gliding at its velocity (points per second).
+    /// `driven` false lets tests step the glide themselves.
+    func touchScrollEnded(velocity: CGPoint, driven: Bool = true) {
+        momentumCaptured = mouseCaptured
+        momentum.start(velocity: velocity, driven: driven)
+    }
+
+    /// Whether a flick is still gliding.
+    var isGliding: Bool { momentum.isGliding }
+
+    /// Advance a glide by one frame (tests; the display link does this).
+    func advanceGlide(dt: Double) { momentum.advance(dt: dt) }
+
+    private func momentumScrolled(_ delta: CGPoint, _ phase: MomentumScroller.Phase) {
+        if phase != .ended, mouseCaptured != momentumCaptured {
+            momentum.stop()
+            return
+        }
+        switch phase {
+        case .began: sendScroll(delta, phase: GHOSTTY_MOUSE_MOMENTUM_BEGAN)
+        case .changed: sendScroll(delta, phase: GHOSTTY_MOUSE_MOMENTUM_CHANGED)
+        case .ended: sendScroll(.zero, phase: GHOSTTY_MOUSE_MOMENTUM_ENDED)
+        }
+    }
+
+    /// Precision scrolling in points, scaled like the macOS trackpad path,
+    /// with the momentum phase in bits 1-3 as macOS sends it.
+    private func sendScroll(_ delta: CGPoint, phase: ghostty_input_mouse_momentum_e) {
+        guard let surface else { return }
         let precisionBit: Int32 = 0b1
-        ghostty_surface_mouse_scroll(
-            surface,
-            Double(translation.x) * 2,
-            Double(translation.y) * 2,
-            precisionBit)
+        let mods = precisionBit | Int32(phase.rawValue) << 1
+        ghostty_surface_mouse_scroll(surface, Double(delta.x) * 2, Double(delta.y) * 2, mods)
     }
 
     /// Pinch to zoom. When the pinch ends, the column count it settled
@@ -527,6 +574,7 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
         switch gesture.state {
         case .began:
+            momentum.stop()
             pinchStartPoints = fontPoints
         case .changed:
             let points = (pinchStartPoints * Float(gesture.scale) * 4).rounded() / 4
@@ -552,6 +600,7 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     func touchLongPress(_ state: UIGestureRecognizer.State, at point: CGPoint) {
         guard let surface else { return }
         if state == .began {
+            momentum.stop()
             longPressMods = mouseCaptured ? GHOSTTY_MODS_SHIFT : GHOSTTY_MODS_NONE
         }
         let mods = longPressMods
