@@ -73,11 +73,39 @@ events. libghostty encodes them in whatever format the program asked for.
 | --- | --- | --- |
 | Tap | Click at that cell (the keyboard isn't touched) | Show the keyboard, or clear the selection |
 | One-finger drag | Mouse wheel | Scrollback (arrow keys in pagers like `less`) |
+| Flick | Keeps scrolling and slows down, like an iOS list; any touch stops it | Same |
 | Long-press and drag | Select text (sent with Shift, so the program doesn't see it) | Select text |
 | Two-finger tap | Show or hide the keyboard | Show or hide the keyboard |
 | Pinch | Zoom | Zoom |
 
 Setting `mouse-reporting = false` in Settings turns this off.
+
+## Dictation
+
+The keyboard's microphone key works. While you speak, the words show
+underlined at the cursor and nothing is sent, because dictation keeps revising
+earlier words and a terminal can't take bytes back. The text is sent when
+dictation ends, when you type another key, or when you press Return (which
+then runs it). Input methods that compose text (Japanese, Chinese) work the
+same way.
+
+## Tabs and splits
+
+Each tab or split is another shell on the same host, over its own SSH
+connection. Use the toolbar's tabs menu or Ghostty's usual keybinds from a
+hardware keyboard (Cmd+T, Cmd+D / Cmd+Shift+D, Cmd+[ / Cmd+], Cmd+W, and so on;
+your Mac config's `keybind` lines aren't imported).
+
+- **Split** stacks panes in portrait (Ghostty's split down) and puts them side
+  by side in landscape (split right). The menu also offers the other direction.
+- Tap a pane to focus it. That tap isn't sent to the program, even one that
+  tracks the mouse. Unfocused panes are dimmed (`unfocused-split-opacity`).
+- Drag a divider to resize; double-tap it to equalize. Zoom shows the focused
+  split alone.
+- Panes in a split use the font a lone pane would (fitted to your column count
+  across the full screen) and show however many columns fit.
+- `exit` closes just that pane; closing the last tab goes back to the host
+  list. A dropped connection leaves the pane open with **Reconnect**.
 
 ## Connect to your Mac
 
@@ -147,13 +175,14 @@ sshd's config. The fixture's `ghostty/config` should set
 `TEST_RUNNER_GHOSTTY_TEST_VISUAL=1` shows sample output full screen for 8
 seconds so you can screenshot it. It uses a theme, an 80-column fit, and the
 key bar. `TEST_RUNNER_GHOSTTY_TEST_VISUAL_SETTINGS=1` does the same for the
-Settings screen.
+Settings screen. `TEST_RUNNER_GHOSTTY_TEST_VISUAL_SPLITS=1` shows two tabs,
+one split in two.
 
 ## Not yet supported
 
 - Local (on-device) shells.
 - Files app integration.
-- Tabs, splits, or multiple sessions.
+- Restoring tabs and splits after the app is relaunched.
 - A confirmation UI for OSC 52 clipboard access (these requests are denied).
 - Agent forwarding, port forwarding, and jump hosts.
 - Reconnecting automatically after the app is suspended.

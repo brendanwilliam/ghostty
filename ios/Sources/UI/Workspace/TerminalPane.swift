@@ -1,15 +1,17 @@
 import SwiftUI
 
-/// Drives one terminal connection to a host: builds the backend, owns the
-/// surface view, and mediates prompts (host key approval, password).
+/// One terminal in a tab or split: its own SSH connection to the host and
+/// its surface view. Mediates that connection's prompts (host key
+/// approval, password).
 @MainActor
-final class TerminalSession: ObservableObject {
+final class TerminalPane: ObservableObject, Identifiable {
     struct HostKeyPrompt: Identifiable {
         let id = UUID()
         let fingerprint: String
         let respond: (Bool) -> Void
     }
 
+    let id = UUID()
     let host: Host
 
     @Published private(set) var surfaceView: TerminalSurfaceView?
@@ -21,38 +23,23 @@ final class TerminalSession: ObservableObject {
     /// Bumped on each connection attempt so SwiftUI swaps the view.
     @Published private(set) var attempt = 0
 
-    /// Saves the column count a pinch settles on.
-    var onColumnsSettled: ((Int) -> Void)?
+    /// Whether this pane fetches the host's Ghostty config before its
+    /// shell opens. Only one pane per screen does; the rest use the cache.
+    var syncsRemoteConfig = true
+    /// Called when a fetch changed the host's config.
+    var onRemoteConfigChanged: ((URL) -> Void)?
 
-    private var columns: Int?
-    /// Whether this host has its own column count (otherwise it follows
-    /// the default in Settings).
-    private var hasOwnColumns: Bool
-    private var columnsObserver: NSObjectProtocol?
+    /// Sets up each new surface (callbacks, columns, font) before it
+    /// connects.
+    var configureSurface: ((TerminalSurfaceView) -> Void)?
 
     init(host: Host) {
         self.host = host
         self.title = host.displayName
-        self.columns = AppSettings.columns(for: host)
-        self.hasOwnColumns = host.columns != nil
-        columnsObserver = NotificationCenter.default.addObserver(
-            forName: AppSettings.columnsDidChange, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.defaultColumnsChanged() }
-        }
-    }
-
-    deinit {
-        if let columnsObserver { NotificationCenter.default.removeObserver(columnsObserver) }
-    }
-
-    private func defaultColumnsChanged() {
-        guard !hasOwnColumns else { return }
-        columns = AppSettings.defaultColumns
-        surfaceView?.targetColumns = columns
     }
 
     /// Connect, using the device key and (if given or saved) a password.
+    /// Returns when the session ends.
     func connect(password: String? = nil) async {
         guard let app = GhosttyRuntime.shared.app else {
             title = "Ghostty failed to initialize"
@@ -70,7 +57,7 @@ final class TerminalSession: ObservableObject {
         let usesRemote = host.usesRemoteConfig
         let cachedConfig = usesRemote && cache.exists ? cache.configURL : nil
         var beforeShell: (@Sendable (@escaping RemoteConfigFetcher.Runner) async -> Void)?
-        if usesRemote {
+        if usesRemote && syncsRemoteConfig {
             beforeShell = { [weak self] run in
                 await self?.syncRemoteConfig(cache: cache, run: run)
             }
@@ -87,27 +74,25 @@ final class TerminalSession: ObservableObject {
             },
             beforeShell: beforeShell)
 
-        let view = TerminalSurfaceView(
-            app: app,
-            backend: backend,
-            remoteConfig: cachedConfig,
-            columns: columns)
-        view.onTitleChange = { [weak self] in self?.title = $0 }
-        view.onColumnsSettled = { [weak self] columns in
-            self?.columns = columns
-            self?.hasOwnColumns = true
-            self?.onColumnsSettled?(columns)
-        }
-        attempt += 1
-        ended = false
-        surfaceView = view
-
-        let error = await view.run()
-        ended = true
+        let view = TerminalSurfaceView(app: app, backend: backend, remoteConfig: cachedConfig)
+        let error = await run(view)
         // Key (and any saved password) was refused: offer a password.
         if let error = error as? SSHSessionError, case .authenticationFailed = error, password == nil {
             needsPassword = true
         }
+    }
+
+    /// Show `view` and run its session until it ends.
+    @discardableResult
+    func run(_ view: TerminalSurfaceView) async -> Error? {
+        view.onTitleChange = { [weak self] in self?.title = $0 }
+        configureSurface?(view)
+        attempt += 1
+        ended = false
+        surfaceView = view
+        let error = await view.run()
+        ended = true
+        return error
     }
 
     func disconnect() {
@@ -123,6 +108,7 @@ final class TerminalSession: ObservableObject {
             let changed = try cache.store(result)
             if changed || surfaceView?.remoteConfig == nil {
                 surfaceView?.remoteConfig = cache.configURL
+                if changed { onRemoteConfigChanged?(cache.configURL) }
             }
         } catch {
             surfaceView?.writeNotice("Couldn't read the host's Ghostty config: \(error.localizedDescription)")

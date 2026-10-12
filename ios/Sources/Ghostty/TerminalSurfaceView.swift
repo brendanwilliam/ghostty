@@ -17,6 +17,42 @@ final class TerminalSurfaceView: UIView {
     /// Called when a pinch settles on a new column count.
     var onColumnsSettled: ((Int) -> Void)?
 
+    /// Tab and split actions from Ghostty keybinds (Cmd+T, Cmd+D...).
+    /// Returns whether the action was handled.
+    var onAction: ((PaneAction) -> Bool)?
+
+    /// Whether this is the focused pane of its tab. A tap on another pane
+    /// only focuses it (calling `onActivate`), even if its program has
+    /// the mouse.
+    var isActivePane = true
+    var onActivate: (() -> Void)?
+
+    /// Whether the session ended without an exit status (the connection
+    /// dropped), rather than the shell exiting. A dropped pane stays open
+    /// so it can be reconnected.
+    private(set) var sessionDropped = false
+    /// Whether the session failed to start (its error is shown in the pane).
+    private(set) var startFailed = false
+
+    /// The width, in points, to fit `targetColumns` across instead of
+    /// this view's own short side. Splits use the whole screen's, so every
+    /// pane in a tab gets the font a lone pane would and shows however
+    /// many columns fit in it.
+    var fitWidth: CGFloat? {
+        didSet {
+            guard fitWidth != oldValue else { return }
+            fitColumns(force: true)
+        }
+    }
+
+    /// The short side columns are fitted across, in points.
+    private var fitShortSide: CGFloat {
+        fitWidth ?? min(bounds.width, bounds.height)
+    }
+
+    /// How opaque an unfocused split is (Ghostty's `unfocused-split-opacity`).
+    private(set) var unfocusedSplitOpacity: Double = 0.7
+
     /// The host's cached Ghostty config, layered between the app defaults
     /// and the app's own settings. Nil when the host's config is off.
     var remoteConfig: URL? {
@@ -171,6 +207,7 @@ final class TerminalSurfaceView: UIView {
         ghostty_surface_update_config(surface, built.config)
         configDiagnostics = built.diagnostics
         mouseReportingEnabled = built.bool("mouse-reporting") ?? true
+        unfocusedSplitOpacity = built.double("unfocused-split-opacity") ?? 0.7
 
         configFontPoints = built.float("font-size") ?? configFontPoints
         if !fontOverridden { fontPoints = configFontPoints }
@@ -182,9 +219,10 @@ final class TerminalSurfaceView: UIView {
     /// Scale the font so `targetColumns` cells fit across the portrait
     /// width. Landscape keeps the same font and so shows more columns.
     func fitColumns(force: Bool = false) {
-        guard let surface, let target = targetColumns, bounds.width > 1, bounds.height > 1 else { return }
+        guard let surface, let target = targetColumns,
+              bounds.width > 1, bounds.height > 1 else { return }
         let scale = Double(window?.screen.scale ?? UIScreen.main.scale)
-        let shortSide = Double(min(bounds.width, bounds.height)) * scale
+        let shortSide = Double(fitShortSide) * scale
         let signature = fitSignature(target: target)
         guard force || signature != lastFitSignature else { return }
         lastFitSignature = signature
@@ -222,14 +260,14 @@ final class TerminalSurfaceView: UIView {
     /// Only the short side matters, so rotating doesn't refit.
     private func fitSignature(target: Int) -> String {
         let scale = window?.screen.scale ?? UIScreen.main.scale
-        return "\(target)|\(Int(min(bounds.width, bounds.height)))|\(scale)"
+        return "\(target)|\(Int(fitShortSide))|\(scale)"
     }
 
     /// Columns that fit across the portrait width at the current font.
     func portraitColumns(shortSide: Double? = nil) -> Int {
         guard let surface else { return 0 }
         let scale = Double(window?.screen.scale ?? UIScreen.main.scale)
-        let short = shortSide ?? Double(min(bounds.width, bounds.height)) * scale
+        let short = shortSide ?? Double(fitShortSide) * scale
         let size = ghostty_surface_size(surface)
         guard size.cell_width_px > 0 else { return 0 }
         return Int(portraitUsableWidth(size, shortSide: short) / Double(size.cell_width_px))
@@ -283,6 +321,7 @@ final class TerminalSurfaceView: UIView {
                             UInt(buf.count))
                     }
                 case .exited(let code, let message):
+                    self?.sessionDropped = code == nil
                     if let message { self?.writeNotice(message) }
                     ghostty_surface_session_exited(surface, UInt32(bitPattern: code ?? 1))
                 }
@@ -294,6 +333,7 @@ final class TerminalSurfaceView: UIView {
             try await backend.start(size: io.currentSize)
         } catch {
             startError = error
+            startFailed = true
             writeNotice("Connection failed: \(error.localizedDescription)")
             ghostty_surface_session_exited(surface, 1)
         }
@@ -528,6 +568,10 @@ final class TerminalSurfaceView: UIView {
         guard let surface else { return }
         momentum.stop()
         commitComposing()
+        guard isActivePane else {
+            onActivate?()
+            return
+        }
         if mouseCaptured {
             ghostty_surface_mouse_pos(surface, point.x, point.y, GHOSTTY_MODS_NONE)
             ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
