@@ -117,14 +117,6 @@ final class TerminalSurfaceView: UIView {
     }
 
     private lazy var accessoryBar = KeyAccessoryBar(target: self)
-
-    /// Dictation not yet sent, shown wrapped at the cursor.
-    lazy var dictationPreview: DictationPreview = {
-        let preview = DictationPreview()
-        addSubview(preview)
-        return preview
-    }()
-
     /// Whether a long-press selection is currently shown.
     private var selectionActive = false
 

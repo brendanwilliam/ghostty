@@ -104,29 +104,18 @@ extension TerminalSurfaceView: UITextInput {
         inputDelegate?.selectionDidChange(self)
     }
 
-    /// Show the provisional text (what hasn't been sent). Dictation goes in
-    /// a panel that wraps and shows line breaks; an input method's short
-    /// marked text is drawn inline at the cursor by libghostty.
+    /// Draw an input method's marked text (what hasn't been sent) inline
+    /// at the cursor. Dictation is typed into the terminal as it streams,
+    /// so while it's being held as it wraps up there's nothing to show.
     private func updatePreedit() {
         guard let surface else { return }
+        guard !dictating else {
+            ghostty_surface_preedit(surface, "", 0)
+            return
+        }
         let sent = Array(composingSent), all = Array(sendable)
         var common = 0
         while common < sent.count, common < all.count, sent[common] == all[common] { common += 1 }
-
-        if dictating {
-            ghostty_surface_preedit(surface, "", 0)
-            // Start at the word being revised, so the panel shows "The
-            // latest" rather than "e latest" after " Th" went out typed.
-            var start = common
-            while start > 0, !all[start - 1].isWhitespace { start -= 1 }
-            let pending = common < all.count ? String(all[start...]).trimmingCharacters(in: .whitespaces) : ""
-            dictationPreview.show(
-                pending, cursor: cursorRect, in: bounds,
-                visibleBottom: min(bounds.maxY, keyboardLayoutGuide.layoutFrame.minY),
-                fontSize: CGFloat(fontPoints))
-            return
-        }
-        dictationPreview.hide()
         let pending = String(all[common...]).replacingOccurrences(of: "\n", with: "⏎")
         pending.withCString { ghostty_surface_preedit(surface, $0, UInt(strlen($0))) }
     }
@@ -265,8 +254,15 @@ extension TerminalSurfaceView: UITextInput {
     func dictationRecordingDidEnd() {
         trace("dictationRecordingDidEnd")
         // iOS then types placeholder spaces, deletes them, and inserts the
-        // result; hold all of that. The result normally follows at once;
-        // don't hold text forever if it doesn't.
+        // result; hold all of that.
+        holdForDictationResult()
+    }
+
+    /// Hold the document while dictation wraps up: iOS clears what it
+    /// streamed and inserts the final result, which is usually the same
+    /// text. Sent live, that would delete and retype the whole phrase.
+    /// The result normally follows at once; don't hold forever if not.
+    private func holdForDictationResult() {
         dictating = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             guard let self, self.dictating else { return }
@@ -315,10 +311,12 @@ extension TerminalSurfaceView: UITextInput {
         trace("replace(\(nsRange(range).map { "\($0)" } ?? "?"), \(text.debugDescription))")
         noteInputMode()
         guard let r = nsRange(range) else { return }
-        // Typing only inserts and deletes; rewriting text in place is
-        // dictation streaming its guess (iOS 26 sends no other signal).
-        // Hold it until the final result.
-        dictating = true
+        // Dictation (iOS 26) streams by rewriting its guess in place; that
+        // goes out live, revisions as backspaces and retyping. Clearing all
+        // of it means dictation is wrapping up (see holdForDictationResult).
+        let clearsAll = !composing.isEmpty && text.isEmpty && r.location == 0
+            && r.length >= (composing as NSString).length
+        if clearsAll { holdForDictationResult() }
         edit(r, with: text)
         sync()
     }

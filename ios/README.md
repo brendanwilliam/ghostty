@@ -93,13 +93,12 @@ deletes a word.
 
 ## Dictation
 
-The keyboard's microphone key works. While you speak, the words show
-underlined in a panel at the cursor (wrapped, with any line breaks you dictate)
-and nothing is sent, because dictation keeps revising
-earlier words and a terminal can't take bytes back. The text is sent when
-dictation ends, when you type another key, or when you press Return (which
-then runs it). Input methods that compose text (Japanese, Chinese) work the
-same way.
+The keyboard's microphone key works. Words are typed into the terminal as you
+speak, so they appear in the program's own input (Claude Code's prompt, the
+shell line) and wrap there. When dictation revises a word it already typed,
+only the changed part is backspaced over and retyped. Input methods that
+compose text (Japanese, Chinese) show their marked text underlined at the
+cursor and send it once it's chosen.
 
 Dictation never presses Return. A dictated new line is sent as a pasted
 newline when the program uses bracketed paste (Claude Code, zsh, fish), so it

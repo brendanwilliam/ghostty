@@ -88,32 +88,33 @@ final class TextInputTests: XCTestCase {
     /// quick brown fox." (from the text-input trace): no dictation mode,
     /// no marked text, just in-place rewrites, a trailing "\n\n" after a
     /// pause, then everything cleared and the result inserted again.
-    func testInPlaceDictationIsHeldSentOnceAndNeverRuns() async throws {
+    func testInPlaceDictationStreamsIntoTheTerminalAndNeverRuns() async throws {
+        let expected = " The quick brown fax\u{7F}\u{7F}ox."
         view.insertText(" Th")
         _ = await waitUntil { self.written == " Th" }
         view.replace(range(0, 3), withText: " The ")
         view.replace(range(0, 5), withText: " The quick brown")
-        view.replace(range(0, 16), withText: " The quick brown fox")
+        view.replace(range(0, 16), withText: " The quick brown fax")
+        // A correction backspaces over just the changed part.
         view.replace(range(0, 20), withText: " The quick brown fox.")
+        // Line breaks are dropped without bracketed paste, never Return.
         view.replace(range(0, 21), withText: " The quick brown fox.\n\n")
-        try await Task.sleep(nanoseconds: 150_000_000)
-        XCTAssertEqual(written, " Th", "dictation's guesses are held")
-        // Shown whole (from the start of the word) in the wrapping panel.
-        XCTAssertFalse(view.dictationPreview.isHidden)
-        XCTAssertEqual(view.dictationPreview.text, "The quick brown fox.")
+        let live = await waitUntil { self.written == expected }
+        XCTAssertTrue(live, "wrote \(written.debugDescription)")
+        XCTAssertEqual(delegate.textChanges, 0)
 
+        // Wrapping up clears everything and inserts the result: held, so
+        // the phrase isn't deleted and retyped.
         view.dictationRecordingDidEnd()
         view.insertText("          ")
         view.replace(range(23, 33), withText: "")
         view.replace(range(0, 23), withText: "")
         view.insertText(" ")
         view.finishDictation(inserting: "The quick brown fox.\n\n")
-        let sent = await waitUntil { self.written == " The quick brown fox." }
-        XCTAssertTrue(sent, "wrote \(written.debugDescription)")
         try await Task.sleep(nanoseconds: 150_000_000)
-        XCTAssertEqual(written, " The quick brown fox.", "no Return, no backspaces, nothing sent twice")
+        XCTAssertEqual(written, expected, "no Return, nothing deleted or sent twice")
         XCTAssertEqual(delegate.textChanges, 0)
-        XCTAssertTrue(view.dictationPreview.isHidden)
+        let expectedAfter = expected
 
         // Pressing Return right after: iOS's placeholder spaces (typed and
         // deleted as dictation wraps up) never reach the program.
@@ -124,8 +125,21 @@ final class TextInputTests: XCTestCase {
         // ...and the leftover "\n" result isn't a blank line in the next prompt.
         view.finishDictation(inserting: "\n")
         try await Task.sleep(nanoseconds: 2_300_000_000)
-        XCTAssertEqual(written, " The quick brown fox.\r")
+        XCTAssertEqual(written, expectedAfter + "\r")
         XCTAssertEqual(document, "")
+    }
+
+    /// From a trace: Return pressed while still dictating. iOS clears the
+    /// streamed text and inserts the result before the Return arrives.
+    func testReturnDuringDictationSendsTheTextOnce() async throws {
+        view.insertText(" I")
+        view.replace(range(0, 2), withText: " I am trying new dictation.")
+        _ = await waitUntil { self.written == " I am trying new dictation." }
+        view.replace(range(0, 27), withText: "")
+        view.finishDictation(inserting: " I am trying new dictation.")
+        view.insertText("\n")
+        let sent = await waitUntil { self.written == " I am trying new dictation.\r" }
+        XCTAssertTrue(sent, "wrote \(written.debugDescription)")
     }
 
     func testDictatedLineBreakIsPastedWhenTheProgramUsesBracketedPaste() async throws {
@@ -137,8 +151,6 @@ final class TextInputTests: XCTestCase {
 
         view.insertText("one")
         view.replace(range(0, 3), withText: "one\ntwo")
-        XCTAssertEqual(view.dictationPreview.text, "one\ntwo", "the panel shows the line break")
-        view.finishDictation(inserting: "")
         let sent = await waitUntil { self.written.hasSuffix("two") }
         XCTAssertTrue(sent, "wrote \(written.debugDescription)")
         XCTAssertEqual(written, "one\u{1B}[200~\n\u{1B}[201~two", "a pasted newline, not Return")
