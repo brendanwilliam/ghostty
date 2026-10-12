@@ -118,6 +118,13 @@ final class TerminalSurfaceView: UIView {
 
     private lazy var accessoryBar = KeyAccessoryBar(target: self)
 
+    /// Dictation not yet sent, shown wrapped at the cursor.
+    lazy var dictationPreview: DictationPreview = {
+        let preview = DictationPreview()
+        addSubview(preview)
+        return preview
+    }()
+
     /// Whether a long-press selection is currently shown.
     private var selectionActive = false
 
@@ -381,7 +388,10 @@ final class TerminalSurfaceView: UIView {
         // that sublayer doesn't track our bounds automatically.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for sublayer in layer.sublayers ?? [] {
+        // Only libghostty's layer; subviews (the dictation panel) lay
+        // themselves out.
+        let subviewLayers = Set(subviews.map { ObjectIdentifier($0.layer) })
+        for sublayer in layer.sublayers ?? [] where !subviewLayers.contains(ObjectIdentifier(sublayer)) {
             sublayer.frame = bounds
             sublayer.contentsScale = scale
         }

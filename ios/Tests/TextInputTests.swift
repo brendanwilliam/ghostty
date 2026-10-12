@@ -98,6 +98,9 @@ final class TextInputTests: XCTestCase {
         view.replace(range(0, 21), withText: " The quick brown fox.\n\n")
         try await Task.sleep(nanoseconds: 150_000_000)
         XCTAssertEqual(written, " Th", "dictation's guesses are held")
+        // Shown whole (from the start of the word) in the wrapping panel.
+        XCTAssertFalse(view.dictationPreview.isHidden)
+        XCTAssertEqual(view.dictationPreview.text, "The quick brown fox.")
 
         view.dictationRecordingDidEnd()
         view.insertText("          ")
@@ -110,6 +113,16 @@ final class TextInputTests: XCTestCase {
         try await Task.sleep(nanoseconds: 150_000_000)
         XCTAssertEqual(written, " The quick brown fox.", "no Return, no backspaces, nothing sent twice")
         XCTAssertEqual(delegate.textChanges, 0)
+        XCTAssertTrue(view.dictationPreview.isHidden)
+
+        // Pressing Return right after: iOS's placeholder spaces (typed and
+        // deleted as dictation wraps up) never reach the program.
+        view.insertText("\n")
+        view.dictationRecordingDidEnd()
+        view.insertText("          ")
+        view.replace(range(0, 10), withText: "")
+        try await Task.sleep(nanoseconds: 2_300_000_000)
+        XCTAssertEqual(written, " The quick brown fox.\r")
     }
 
     func testDictatedLineBreakIsPastedWhenTheProgramUsesBracketedPaste() async throws {
@@ -121,6 +134,7 @@ final class TextInputTests: XCTestCase {
 
         view.insertText("one")
         view.replace(range(0, 3), withText: "one\ntwo")
+        XCTAssertEqual(view.dictationPreview.text, "one\ntwo", "the panel shows the line break")
         view.finishDictation(inserting: "")
         let sent = await waitUntil { self.written.hasSuffix("two") }
         XCTAssertTrue(sent, "wrote \(written.debugDescription)")

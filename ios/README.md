@@ -94,7 +94,8 @@ deletes a word.
 ## Dictation
 
 The keyboard's microphone key works. While you speak, the words show
-underlined at the cursor and nothing is sent, because dictation keeps revising
+underlined in a panel at the cursor (wrapped, with any line breaks you dictate)
+and nothing is sent, because dictation keeps revising
 earlier words and a terminal can't take bytes back. The text is sent when
 dictation ends, when you type another key, or when you press Return (which
 then runs it). Input methods that compose text (Japanese, Chinese) work the

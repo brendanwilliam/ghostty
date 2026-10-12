@@ -332,6 +332,21 @@ final class VisualSmokeTests: XCTestCase {
         sample += "^ 80 columns: this line should exactly fill the width\r\n$ "
         backend.continuation.yield(.output(Data(sample.utf8)))
 
+        // With GHOSTTY_TEST_VISUAL_DICTATION, show dictation in progress
+        // (bracketed paste on, so its line break is kept).
+        if ProcessInfo.processInfo.environment["GHOSTTY_TEST_VISUAL_DICTATION"] != nil {
+            backend.continuation.yield(.output(Data("\u{1B}[?2004h".utf8)))
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            view.accessoryTapped(.shift)
+            view.insertText(" Th")
+            view.replace(TextOffsetRange(0, 3), withText: """
+                 The latest build shows an underline on dictated text, but seems to be unable \
+                to create a new line character.
+
+                That was an example of me
+                """)
+        }
+
         try await Task.sleep(nanoseconds: 8_000_000_000)
         backend.continuation.finish()
         _ = await run.value

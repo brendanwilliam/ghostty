@@ -104,13 +104,29 @@ extension TerminalSurfaceView: UITextInput {
         inputDelegate?.selectionDidChange(self)
     }
 
-    /// The provisional text (what hasn't been sent), drawn at the cursor.
+    /// Show the provisional text (what hasn't been sent). Dictation goes in
+    /// a panel that wraps and shows line breaks; an input method's short
+    /// marked text is drawn inline at the cursor by libghostty.
     private func updatePreedit() {
         guard let surface else { return }
         let sent = Array(composingSent), all = Array(sendable)
         var common = 0
         while common < sent.count, common < all.count, sent[common] == all[common] { common += 1 }
-        // Line breaks can't be drawn in the preedit; show a return symbol.
+
+        if dictating {
+            ghostty_surface_preedit(surface, "", 0)
+            // Start at the word being revised, so the panel shows "The
+            // latest" rather than "e latest" after " Th" went out typed.
+            var start = common
+            while start > 0, !all[start - 1].isWhitespace { start -= 1 }
+            let pending = common < all.count ? String(all[start...]).trimmingCharacters(in: .whitespaces) : ""
+            dictationPreview.show(
+                pending, cursor: cursorRect, in: bounds,
+                visibleBottom: min(bounds.maxY, keyboardLayoutGuide.layoutFrame.minY),
+                fontSize: CGFloat(fontPoints))
+            return
+        }
+        dictationPreview.hide()
         let pending = String(all[common...]).replacingOccurrences(of: "\n", with: "⏎")
         pending.withCString { ghostty_surface_preedit(surface, $0, UInt(strlen($0))) }
     }
@@ -243,8 +259,10 @@ extension TerminalSurfaceView: UITextInput {
 
     func dictationRecordingDidEnd() {
         trace("dictationRecordingDidEnd")
-        // The result normally follows at once; don't hold text forever if
-        // it doesn't.
+        // iOS then types placeholder spaces, deletes them, and inserts the
+        // result; hold all of that. The result normally follows at once;
+        // don't hold text forever if it doesn't.
+        dictating = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             guard let self, self.dictating else { return }
             self.dictating = false
