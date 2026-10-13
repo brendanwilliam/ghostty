@@ -138,7 +138,7 @@ final class WorkspaceTests: XCTestCase {
 
     override func tearDown() async throws {
         for backend in backends.values { backend.continuation.finish() }
-        workspace.disconnectAll()
+        workspace.endAll()
     }
 
     private func surfacesReady() async -> Bool {

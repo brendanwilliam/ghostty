@@ -3,6 +3,10 @@ import SwiftUI
 /// One terminal in a tab or split: its own SSH connection to the host and
 /// its surface view. Mediates that connection's prompts (host key
 /// approval, password).
+///
+/// When the host has zmx, the shell runs in a zmx session named
+/// `sessionName`, so it keeps running when the connection drops (or the
+/// app is closed) and a new connection picks it up again.
 @MainActor
 final class TerminalPane: ObservableObject, Identifiable {
     struct HostKeyPrompt: Identifiable {
@@ -11,16 +15,20 @@ final class TerminalPane: ObservableObject, Identifiable {
         let respond: (Bool) -> Void
     }
 
-    let id = UUID()
+    let id: UUID
     let host: Host
+    /// This pane's zmx session on the host.
+    let sessionName: String
 
     @Published private(set) var surfaceView: TerminalSurfaceView?
     @Published var title: String
     @Published var hostKeyPrompt: HostKeyPrompt?
     @Published var needsPassword = false
     @Published private(set) var ended = false
+    /// Attaching to its session again after the connection dropped.
+    @Published var reconnecting = false
 
-    /// Bumped on each connection attempt so SwiftUI swaps the view.
+    /// Bumped each time the view changes so SwiftUI swaps it.
     @Published private(set) var attempt = 0
 
     /// Whether this pane fetches the host's Ghostty config before its
@@ -32,10 +40,31 @@ final class TerminalPane: ObservableObject, Identifiable {
     /// Sets up each new surface (callbacks, columns, font) before it
     /// connects.
     var configureSurface: ((TerminalSurfaceView) -> Void)?
+    /// Called as a new surface replaces one that had the keyboard.
+    var onKeyboardHandoff: (() -> Void)?
 
-    init(host: Host) {
+    /// The host's zmx sessions. Nil runs a plain login shell.
+    var sessions: HostSessions?
+    /// Whether the current (or last) connection attached to a zmx
+    /// session, so a drop can be picked up again.
+    var attachedToSession = false
+    /// Why the last connection failed to start, if it did.
+    private(set) var lastError: Error?
+
+    init(id: UUID = UUID(), host: Host, sessionName: String? = nil) {
+        self.id = id
         self.host = host
+        self.sessionName = sessionName ?? ZmxSession.name(for: id, device: HostSessions.deviceTag)
         self.title = host.displayName
+    }
+
+    /// Whether the session dropped in a way that attaching again fixes:
+    /// its zmx session lives on, and nothing needs the user.
+    var canReattach: Bool {
+        guard ended, attachedToSession, hostKeyPrompt == nil, !needsPassword else { return false }
+        if lastError is SSHSessionError { return false }
+        guard let view = surfaceView else { return true }
+        return view.sessionDropped || view.startFailed
     }
 
     /// Connect, using the device key and (if given or saved) a password.
@@ -46,33 +75,35 @@ final class TerminalPane: ObservableObject, Identifiable {
             return
         }
 
-        let deviceKey = try? DeviceKey.loadOrCreate()
-        let savedPassword = host.savesPassword
-            ? (try? Keychain.read(host.passwordAccount)).flatMap { String(data: $0, encoding: .utf8) }
-            : nil
-
         // Start from the host's config as last fetched so the first frame
         // looks right; it's refreshed before the shell opens.
         let cache = RemoteConfigCache(hostID: host.id)
         let usesRemote = host.usesRemoteConfig
         let cachedConfig = usesRemote && cache.exists ? cache.configURL : nil
-        var beforeShell: (@Sendable (@escaping RemoteConfigFetcher.Runner) async -> Void)?
+        var beforeShell: (@Sendable (@escaping SSHBackend.Runner) async -> Void)?
         if usesRemote && syncsRemoteConfig {
             beforeShell = { [weak self] run in
                 await self?.syncRemoteConfig(cache: cache, run: run)
             }
         }
 
+        let name = sessionName
+        let sessions = sessions
         let backend = SSHBackend(
             host: host,
-            credentials: SSHCredentials(
-                username: host.username,
-                deviceKey: deviceKey,
-                password: password ?? savedPassword),
+            credentials: .saved(for: host, password: password),
             approveUnknownHostKey: { [weak self] fingerprint in
                 await self?.askToTrust(fingerprint: fingerprint) ?? false
             },
-            beforeShell: beforeShell)
+            beforeShell: beforeShell,
+            command: { [weak self] run in
+                let command = await sessions?.prepare(session: name, run: run)
+                await self?.setAttached(command != nil)
+                return command
+            },
+            sessionLivesOn: { run in
+                await sessions?.isRunning(name, run: run) ?? false
+            })
 
         let view = TerminalSurfaceView(app: app, backend: backend, remoteConfig: cachedConfig)
         let error = await run(view)
@@ -82,17 +113,52 @@ final class TerminalPane: ObservableObject, Identifiable {
         }
     }
 
+    private func setAttached(_ attached: Bool) {
+        attachedToSession = attached
+    }
+
     /// Show `view` and run its session until it ends.
+    ///
+    /// Attaching to a zmx session again keeps the old view on screen
+    /// until the new one has output (zmx redraws the screen as it
+    /// attaches), so there's no blank flash; if it never gets any, the
+    /// old view stays.
     @discardableResult
     func run(_ view: TerminalSurfaceView) async -> Error? {
         view.onTitleChange = { [weak self] in self?.title = $0 }
         configureSurface?(view)
-        attempt += 1
         ended = false
-        surfaceView = view
+        lastError = nil
+
+        if let old = surfaceView, attachedToSession {
+            view.frame = old.bounds
+            view.layoutIfNeeded()
+            view.onFirstOutput = { [weak self, weak view] in
+                guard let self, let view else { return }
+                self.show(view, replacing: old)
+            }
+        } else {
+            show(view, replacing: nil)
+        }
+
         let error = await view.run()
+        lastError = error
         ended = true
+        reconnecting = reconnecting && canReattach
         return error
+    }
+
+    private func show(_ view: TerminalSurfaceView, replacing old: TerminalSurfaceView?) {
+        if old?.isFirstResponder == true { onKeyboardHandoff?() }
+        attempt += 1
+        surfaceView = view
+        reconnecting = false
+    }
+
+    /// Close the connection, keeping the view. Its session keeps running
+    /// on the host if it's in zmx.
+    func suspend() {
+        surfaceView?.closeBackend()
     }
 
     func disconnect() {

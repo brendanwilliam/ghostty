@@ -24,6 +24,10 @@ struct Host: Identifiable, Codable, Hashable {
     /// app-wide default from Settings.
     var columns: Int?
 
+    /// Run shells inside zmx on the host (when it's installed) so they
+    /// keep running while the app is closed.
+    var keepsSessions = true
+
     var displayName: String { name.isEmpty ? hostname : name }
 
     /// Key used for known-hosts and Keychain entries.
@@ -37,6 +41,7 @@ extension Host {
     // newer fields) still load.
     private enum CodingKeys: String, CodingKey {
         case id, name, hostname, port, username, term, savesPassword, usesRemoteConfig, columns
+        case keepsSessions
     }
 
     init(from decoder: Decoder) throws {
@@ -50,6 +55,7 @@ extension Host {
         savesPassword = try c.decodeIfPresent(Bool.self, forKey: .savesPassword) ?? false
         usesRemoteConfig = try c.decodeIfPresent(Bool.self, forKey: .usesRemoteConfig) ?? true
         columns = try c.decodeIfPresent(Int.self, forKey: .columns)
+        keepsSessions = try c.decodeIfPresent(Bool.self, forKey: .keepsSessions) ?? true
     }
 }
 

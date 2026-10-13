@@ -19,6 +19,15 @@ struct GhosttyApp: App {
         }
         .onChange(of: scenePhase) { _, phase in
             GhosttyRuntime.shared.setFocus(phase == .active)
+            switch phase {
+            case .background:
+                SessionLifecycle.shared.didEnterBackground(workspaces)
+            case .active:
+                SessionLifecycle.shared.didBecomeActive()
+                workspaces.resumeAll()
+            default:
+                break
+            }
         }
     }
 }

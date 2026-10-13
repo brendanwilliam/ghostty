@@ -59,6 +59,19 @@ private struct PaneView: View {
                     .allowsHitTesting(false)
             }
         }
+        .overlay(alignment: .top) {
+            if pane.reconnecting {
+                Label("Reconnecting…", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.top, 8)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: pane.reconnecting)
         .clipped()
     }
 }

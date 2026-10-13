@@ -12,8 +12,8 @@ final class WorkspaceStoreTests: XCTestCase {
 
     override func setUp() async throws {
         let app = try XCTUnwrap(GhosttyRuntime.shared.app)
-        store = WorkspaceStore { host in
-            TerminalWorkspace(host: host) { [weak self] pane in
+        store = WorkspaceStore(archive: WorkspaceArchive(url: nil)) { host, layout, sessions in
+            TerminalWorkspace(host: host, layout: layout, sessions: sessions) { [weak self] pane in
                 let backend = FakeBackend()
                 self?.backends.append(backend)
                 await pane.run(TerminalSurfaceView(app: app, backend: backend))
@@ -73,14 +73,14 @@ final class WorkspaceStoreTests: XCTestCase {
         XCTAssertTrue(forgotten, "a closed workspace isn't reopened")
     }
 
-    func testDisconnectEndsTheSessions() async throws {
+    func testEndSessionsEndsThem() async throws {
         let workspace = store.workspace(for: host)
         workspace.start()
         let connected = await waitUntil { workspace.focusedPane?.surfaceView != nil }
         XCTAssertTrue(connected)
         let pane = try XCTUnwrap(workspace.focusedPane)
 
-        store.disconnect(host)
+        store.endSessions(host)
         XCTAssertNil(pane.surfaceView)
         XCTAssertNil(store.openWorkspace(for: host))
     }

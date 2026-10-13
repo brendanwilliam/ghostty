@@ -124,7 +124,36 @@ your Mac config's `keybind` lines aren't imported).
   list. A dropped connection leaves the pane open with **Reconnect**.
 - Going back to the host list (or anywhere else in the app) leaves a host's tabs
   running; the host shows "2 tabs open", and opening it returns to them. Swipe
-  the host and tap **Disconnect** to end them all.
+  the host and tap **End Sessions** to end them all.
+
+## Sessions that survive the app
+
+iOS suspends the app soon after you leave it and may quit it at any time, and
+that drops its SSH connections. When the host has
+[zmx](https://github.com/neurosnap/zmx), each tab runs its shell inside a zmx
+session on the host instead, so it keeps running (Claude Code included) while
+the app is in the background, swiped away, or relaunched.
+
+- Coming back reattaches each pane. zmx redraws the screen as it attaches, and
+  the old screen stays up until it has, so there's no blank flash.
+- A dropped connection reattaches by itself ("Reconnecting…"), backing off,
+  and retries as soon as the network comes back. **Reconnect** appears only
+  if that gives up.
+- The tabs and splits are saved. After a relaunch the host still shows
+  "3 tabs open", and opening it restores the layout with every pane attached
+  to its session.
+- `exit` ends a pane's session. Closing a tab or split (Cmd+W, the menu) and
+  **End Sessions** end their sessions on the host too. If the host can't be
+  reached, they're ended the next time it can.
+- Sessions are named `gios-<device>-<pane>`. On the Mac, `zmx list` shows them
+  and `zmx attach gios-…` opens the same shell there.
+- If a host doesn't have zmx, a banner offers to install it with Homebrew
+  (`brew install neurosnap/tap/zmx`). Until then tabs are plain shells that
+  end with the connection. Turn it off per host with **Keep sessions running**.
+
+The app runs `$SHELL -lc '… zmx attach <name>'` as the PTY's command (an SSH
+exec request with a PTY, like `ssh -t`). That needs one addition to Citadel,
+so the project pins a fork of Citadel 0.12.0 with `withPTY(_:command:)`.
 
 ## Connect to your Mac
 
@@ -184,6 +213,9 @@ TEST_RUNNER_GHOSTTY_TEST_SSH_KEY_SEED=<hex ed25519 seed> \
 xcodebuild test ...
 ```
 
+With zmx installed on that host, `TEST_RUNNER_GHOSTTY_TEST_ZMX=1` also runs
+a session through a dropped connection and back.
+
 To also test the config fetch, add `SetEnv XDG_CONFIG_HOME=<fixture>` to that
 sshd's config. The fixture's `ghostty/config` should set
 `cursor-style = underline` and an `initial-command`, and include
@@ -201,7 +233,6 @@ one split in two.
 
 - Local (on-device) shells.
 - Files app integration.
-- Restoring tabs and splits after the app is relaunched.
+- Restoring tabs and splits after a relaunch on hosts without zmx.
 - A confirmation UI for OSC 52 clipboard access (these requests are denied).
 - Agent forwarding, port forwarding, and jump hosts.
-- Reconnecting automatically after the app is suspended.

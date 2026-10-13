@@ -5,10 +5,12 @@ options:
     iOS: "17.0"
 packages:
   # 0.12.0 rather than 0.12.1: 0.12.1 swapped its SSH implementation to
-  # an unvetted third-party fork of swift-nio-ssh.
+  # an unvetted third-party fork of swift-nio-ssh. Pinned to a fork of the
+  # 0.12.0 tag with one addition, withPTY(_:command:), which runs a command
+  # on a PTY (an exec request) rather than the login shell.
   Citadel:
-    url: https://github.com/orlandos-nl/Citadel.git
-    exactVersion: 0.12.0
+    url: https://github.com/brendanwilliam/Citadel.git
+    revision: 5e2d6d4304dcd577ef9b8ba29d06659b30ed86e5
   # Citadel's own SSH dependency; listed so the app can import NIOSSH.
   swift-nio-ssh:
     url: https://github.com/Joannis/swift-nio-ssh.git

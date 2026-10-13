@@ -5,12 +5,19 @@ import SwiftUI
 /// its own shell on the host. Mirrors Ghostty's tab and split actions.
 @MainActor
 final class TerminalWorkspace: ObservableObject {
-    struct Tab: Identifiable, Equatable {
-        let id = UUID()
+    struct Tab: Identifiable, Equatable, Codable {
+        let id: UUID
         var tree: SplitTree
         var focused: UUID
         /// A split shown alone, filling the tab.
         var zoomed: UUID?
+
+        init(id: UUID = UUID(), tree: SplitTree, focused: UUID, zoomed: UUID? = nil) {
+            self.id = id
+            self.tree = tree
+            self.focused = focused
+            self.zoomed = zoomed
+        }
 
         /// The panes to show: just the zoomed one, or all of them.
         var visiblePanes: [UUID] { zoomed.map { [$0] } ?? tree.panes }
@@ -33,6 +40,9 @@ final class TerminalWorkspace: ObservableObject {
     /// Saves the column count a pinch settles on.
     var onColumnsSettled: ((Int) -> Void)?
 
+    /// The host's zmx sessions, which let panes outlive the app.
+    let sessions: HostSessions?
+
     /// Connects a pane. Tests replace this to avoid SSH.
     private let connector: @MainActor (TerminalPane) async -> Void
     private var columns: Int?
@@ -41,21 +51,48 @@ final class TerminalWorkspace: ObservableObject {
     private var hasOwnColumns: Bool
     private var columnsObserver: NSObjectProtocol?
     private var paneObservers: [UUID: AnyCancellable] = [:]
+    /// Each pane's connection, including attaching again after drops.
+    private var connections: [UUID: Task<Void, Never>] = [:]
     /// A pane whose surface should take the keyboard once it's shown.
     private var pendingKeyboard: UUID?
     private var started = false
 
-    init(host: Host, connector: (@MainActor (TerminalPane) async -> Void)? = nil) {
+    /// Waits between attempts to attach again. Tests replace this.
+    var waitToRetry: @MainActor (Duration) async -> Void = { delay in
+        await SessionLifecycle.shared.waitToRetry(after: delay)
+    }
+
+    /// Delays between attempts to attach to a dropped session again. It
+    /// gives up after the last.
+    static let retryDelays: [Duration] = [.milliseconds(500), .seconds(1), .seconds(2), .seconds(4),
+                                          .seconds(8), .seconds(15), .seconds(15), .seconds(15)]
+
+    /// - Parameter layout: Tabs and splits saved from an earlier launch,
+    ///   whose panes attach to their sessions again.
+    init(host: Host, layout: WorkspaceLayout? = nil, sessions: HostSessions? = nil,
+         connector: (@MainActor (TerminalPane) async -> Void)? = nil) {
         self.host = host
+        self.sessions = sessions
         self.connector = connector ?? { await $0.connect() }
         self.columns = AppSettings.columns(for: host)
         self.hasOwnColumns = host.columns != nil
-        let first = TerminalPane(host: host)
-        let tab = Tab(tree: SplitTree(first.id), focused: first.id)
-        tabs = [tab]
-        selectedTabID = tab.id
-        pendingKeyboard = first.id
-        add(first)
+        if let layout, !layout.tabs.isEmpty {
+            tabs = layout.tabs
+            selectedTabID = layout.tabs.contains { $0.id == layout.selectedTabID }
+                ? layout.selectedTabID : layout.tabs[0].id
+            for id in layout.tabs.flatMap(\.tree.panes) {
+                add(TerminalPane(id: id, host: host, sessionName: layout.sessions[id]))
+            }
+            pendingKeyboard = tabs.first { $0.id == selectedTabID }?.focused
+        } else {
+            let first = TerminalPane(host: host)
+            let tab = Tab(tree: SplitTree(first.id), focused: first.id)
+            tabs = [tab]
+            selectedTabID = tab.id
+            pendingKeyboard = first.id
+            add(first)
+        }
+        sessions?.onSessionsFound = { [weak self] found in self?.adopt(found) }
         columnsObserver = NotificationCenter.default.addObserver(
             forName: AppSettings.columnsDidChange, object: nil, queue: .main
         ) { [weak self] _ in
@@ -102,25 +139,67 @@ final class TerminalWorkspace: ObservableObject {
         }
     }
 
-    func disconnectAll() {
-        for pane in panes.values { pane.disconnect() }
+    /// End every pane, and its session on the host.
+    func endAll() {
+        for tab in tabs { closeTab(tab.id) }
     }
 
     /// Connect again after the session ended, optionally with a password.
     func reconnect(_ pane: TerminalPane, password: String? = nil) {
         if pane.id == selectedTab?.focused { pendingKeyboard = pane.id }
         if let password {
-            Task { await pane.connect(password: password) }
+            connect(pane) { await $0.connect(password: password) }
         } else {
             connect(pane)
         }
     }
 
-    private func connect(_ pane: TerminalPane) {
-        Task { [connector] in await connector(pane) }
+    /// Close every connection, keeping the panes; their zmx sessions keep
+    /// running on the host. They attach again once the app is active.
+    func suspend() {
+        for pane in panes.values where pane.attachedToSession {
+            pane.suspend()
+        }
+    }
+
+    /// Attach again any pane whose session dropped and that gave up
+    /// retrying (say while the app was in the background).
+    func resume() {
+        guard started else { return }
+        for pane in panes.values where pane.canReattach && !pane.reconnecting {
+            connect(pane)
+        }
+    }
+
+    /// Run a pane's connection. When a zmx session drops, attach to it
+    /// again, backing off, until it works or `retryDelays` run out.
+    private func connect(_ pane: TerminalPane, first: (@MainActor (TerminalPane) async -> Void)? = nil) {
+        connections[pane.id]?.cancel()
+        connections[pane.id] = Task { [weak self, connector] in
+            var attempt = 0
+            await (first ?? connector)(pane)
+            while !Task.isCancelled, let self, self.panes[pane.id] === pane, pane.canReattach {
+                guard attempt < Self.retryDelays.count else {
+                    pane.reconnecting = false
+                    return
+                }
+                pane.reconnecting = true
+                await self.waitToRetry(Self.retryDelays[attempt])
+                guard !Task.isCancelled, self.panes[pane.id] === pane else { return }
+                let started = ContinuousClock.now
+                await connector(pane)
+                // A connection that lasted a while starts the backoff over.
+                attempt = ContinuousClock.now - started > .seconds(10) ? 0 : attempt + 1
+            }
+        }
     }
 
     private func add(_ pane: TerminalPane) {
+        pane.sessions = sessions
+        pane.onKeyboardHandoff = { [weak self, weak pane] in
+            guard let pane else { return }
+            self?.pendingKeyboard = pane.id
+        }
         // One pane fetches the host's config; the others use the cache.
         pane.syncsRemoteConfig = panes.isEmpty
         pane.onRemoteConfigChanged = { [weak self, weak pane] url in
@@ -319,10 +398,39 @@ final class TerminalWorkspace: ObservableObject {
         applyPaneStates()
     }
 
-    private func dispose(_ pane: UUID) {
-        panes[pane]?.disconnect()
-        panes[pane] = nil
-        paneObservers[pane] = nil
+    /// Close a pane for good, ending its zmx session on the host.
+    private func dispose(_ id: UUID) {
+        connections[id]?.cancel()
+        connections[id] = nil
+        if let pane = panes[id] {
+            pane.disconnect()
+            sessions?.end([pane.sessionName])
+        }
+        panes[id] = nil
+        paneObservers[id] = nil
+    }
+
+    // MARK: Saving
+
+    /// The tabs and splits, and each pane's session, to restore later.
+    var layout: WorkspaceLayout {
+        WorkspaceLayout(
+            tabs: tabs,
+            selectedTabID: selectedTabID,
+            sessions: panes.mapValues(\.sessionName))
+    }
+
+    /// Open this device's sessions that no pane shows (say the app quit
+    /// before saving) as tabs of their own.
+    func adopt(_ found: [String]) {
+        guard !closed else { return }
+        let shown = Set(panes.values.map(\.sessionName))
+        for name in found where !shown.contains(name) {
+            let pane = TerminalPane(host: host, sessionName: name)
+            tabs.append(Tab(tree: SplitTree(pane.id), focused: pane.id))
+            add(pane)
+        }
+        applyPaneStates()
     }
 
     // MARK: Focus and layout state
