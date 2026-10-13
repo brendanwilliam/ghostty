@@ -73,11 +73,58 @@ events. libghostty encodes them in whatever format the program asked for.
 | --- | --- | --- |
 | Tap | Click at that cell (the keyboard isn't touched) | Show the keyboard, or clear the selection |
 | One-finger drag | Mouse wheel | Scrollback (arrow keys in pagers like `less`) |
+| Flick | Keeps scrolling and slows down, like an iOS list; any touch stops it | Same |
 | Long-press and drag | Select text (sent with Shift, so the program doesn't see it) | Select text |
 | Two-finger tap | Show or hide the keyboard | Show or hide the keyboard |
 | Pinch | Zoom | Zoom |
 
 Setting `mouse-reporting = false` in Settings turns this off.
+
+## Key bar
+
+The row above the keyboard has Escape, Control, Option, Command, Shift, and
+Tab (shown with their Apple keyboard symbols), arrows, and a few symbols. The
+row scrolls; the hide-keyboard key stays pinned at its right edge.
+
+Control, Option, Command, and Shift latch: tap one, then the next key you type
+gets it. Command makes Ghostty's shortcuts reachable without a hardware
+keyboard (Cmd+T new tab, Cmd+D split, Cmd+V paste, Cmd+K clear). Option+Backspace
+deletes a word.
+
+## Dictation
+
+The keyboard's microphone key works. Words are typed into the terminal as you
+speak, so they appear in the program's own input (Claude Code's prompt, the
+shell line) and wrap there. When dictation revises a word it already typed,
+only the changed part is backspaced over and retyped. Input methods that
+compose text (Japanese, Chinese) show their marked text underlined at the
+cursor and send it once it's chosen.
+
+Dictation never presses Return. A dictated new line is sent as a pasted
+newline when the program uses bracketed paste (Claude Code, zsh, fish), so it
+adds a line instead of sending the message or running the command. Elsewhere
+it's dropped.
+
+## Tabs and splits
+
+Each tab or split is another shell on the same host, over its own SSH
+connection. Use the toolbar's tabs menu or Ghostty's usual keybinds from a
+hardware keyboard (Cmd+T, Cmd+D / Cmd+Shift+D, Cmd+[ / Cmd+], Cmd+W, and so on;
+your Mac config's `keybind` lines aren't imported).
+
+- **Split** stacks panes in portrait (Ghostty's split down) and puts them side
+  by side in landscape (split right). The menu also offers the other direction.
+- Tap a pane to focus it. That tap isn't sent to the program, even one that
+  tracks the mouse. Unfocused panes are dimmed (`unfocused-split-opacity`).
+- Drag a divider to resize; double-tap it to equalize. Zoom shows the focused
+  split alone.
+- Panes in a split use the font a lone pane would (fitted to your column count
+  across the full screen) and show however many columns fit.
+- `exit` closes just that pane; closing the last tab goes back to the host
+  list. A dropped connection leaves the pane open with **Reconnect**.
+- Going back to the host list (or anywhere else in the app) leaves a host's tabs
+  running; the host shows "2 tabs open", and opening it returns to them. Swipe
+  the host and tap **Disconnect** to end them all.
 
 ## Connect to your Mac
 
@@ -147,13 +194,14 @@ sshd's config. The fixture's `ghostty/config` should set
 `TEST_RUNNER_GHOSTTY_TEST_VISUAL=1` shows sample output full screen for 8
 seconds so you can screenshot it. It uses a theme, an 80-column fit, and the
 key bar. `TEST_RUNNER_GHOSTTY_TEST_VISUAL_SETTINGS=1` does the same for the
-Settings screen.
+Settings screen. `TEST_RUNNER_GHOSTTY_TEST_VISUAL_SPLITS=1` shows two tabs,
+one split in two.
 
 ## Not yet supported
 
 - Local (on-device) shells.
 - Files app integration.
-- Tabs, splits, or multiple sessions.
+- Restoring tabs and splits after the app is relaunched.
 - A confirmation UI for OSC 52 clipboard access (these requests are denied).
 - Agent forwarding, port forwarding, and jump hosts.
 - Reconnecting automatically after the app is suspended.

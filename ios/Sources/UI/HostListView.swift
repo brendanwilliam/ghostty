@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HostListView: View {
     @EnvironmentObject private var store: HostStore
+    @EnvironmentObject private var workspaces: WorkspaceStore
     @StateObject private var bonjour = BonjourBrowser()
     @State private var editing: Host?
     @State private var showingKey = false
@@ -23,11 +24,20 @@ struct HostListView: View {
                                 Text("\(host.username)@\(host.hostname)\(host.port == 22 ? "" : ":\(host.port)")")
                                     .font(.caption.monospaced())
                                     .foregroundStyle(.secondary)
+                                if let open = workspaces.openWorkspace(for: host) {
+                                    OpenSessionsLabel(workspace: open)
+                                }
                             }
                         }
                         .swipeActions {
-                            Button("Delete", role: .destructive) { store.delete(host) }
+                            Button("Delete", role: .destructive) {
+                                workspaces.disconnect(host)
+                                store.delete(host)
+                            }
                             Button("Edit") { editing = host }.tint(.gray)
+                            if workspaces.openWorkspace(for: host) != nil {
+                                Button("Disconnect") { workspaces.disconnect(host) }.tint(.orange)
+                            }
                         }
                     }
                 }
@@ -49,7 +59,7 @@ struct HostListView: View {
             }
             .navigationTitle("Ghostty")
             .navigationDestination(for: Host.self) { host in
-                TerminalScreen(host: host)
+                TerminalScreen(workspace: workspaces.workspace(for: host))
             }
             .toolbar {
                 ToolbarItemGroup(placement: .topBarLeading) {
@@ -89,5 +99,27 @@ struct HostListView: View {
             hostname: resolved?.host ?? "",
             port: resolved?.port ?? 22,
             username: "")
+    }
+}
+
+/// "2 tabs open" under a host that has sessions running.
+private struct OpenSessionsLabel: View {
+    @ObservedObject var workspace: TerminalWorkspace
+
+    var body: some View {
+        let tabs = workspace.tabs.count
+        Label(tabs == 1 ? "1 tab open" : "\(tabs) tabs open", systemImage: "circle.fill")
+            .labelStyle(OpenSessionsLabelStyle())
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+}
+
+private struct OpenSessionsLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) {
+            configuration.icon.font(.system(size: 6)).foregroundStyle(.green)
+            configuration.title
+        }
     }
 }

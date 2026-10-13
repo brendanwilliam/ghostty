@@ -4,7 +4,7 @@ import GhosttyKit
 /// A UIView hosting a libghostty terminal surface whose IO is provided by
 /// a `TerminalBackend` (via libghostty's manual IO mode) instead of a
 /// local subprocess.
-final class TerminalSurfaceView: UIView, UIKeyInput {
+final class TerminalSurfaceView: UIView {
     private(set) var surface: ghostty_surface_t?
 
     /// Connects libghostty's IO callbacks to the backend. Immutable so it
@@ -16,6 +16,42 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
 
     /// Called when a pinch settles on a new column count.
     var onColumnsSettled: ((Int) -> Void)?
+
+    /// Tab and split actions from Ghostty keybinds (Cmd+T, Cmd+D...).
+    /// Returns whether the action was handled.
+    var onAction: ((PaneAction) -> Bool)?
+
+    /// Whether this is the focused pane of its tab. A tap on another pane
+    /// only focuses it (calling `onActivate`), even if its program has
+    /// the mouse.
+    var isActivePane = true
+    var onActivate: (() -> Void)?
+
+    /// Whether the session ended without an exit status (the connection
+    /// dropped), rather than the shell exiting. A dropped pane stays open
+    /// so it can be reconnected.
+    private(set) var sessionDropped = false
+    /// Whether the session failed to start (its error is shown in the pane).
+    private(set) var startFailed = false
+
+    /// The width, in points, to fit `targetColumns` across instead of
+    /// this view's own short side. Splits use the whole screen's, so every
+    /// pane in a tab gets the font a lone pane would and shows however
+    /// many columns fit in it.
+    var fitWidth: CGFloat? {
+        didSet {
+            guard fitWidth != oldValue else { return }
+            fitColumns(force: true)
+        }
+    }
+
+    /// The short side columns are fitted across, in points.
+    private var fitShortSide: CGFloat {
+        fitWidth ?? min(bounds.width, bounds.height)
+    }
+
+    /// How opaque an unfocused split is (Ghostty's `unfocused-split-opacity`).
+    private(set) var unfocusedSplitOpacity: Double = 0.7
 
     /// The host's cached Ghostty config, layered between the app defaults
     /// and the app's own settings. Nil when the host's config is off.
@@ -56,26 +92,31 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     /// Software modifier state toggled from the accessory bar. These
     /// apply to the next typed character and then reset.
     private var ctrlLatched = false { didSet { accessoryBar.setCtrl(ctrlLatched) } }
-    private var altLatched = false { didSet { accessoryBar.setAlt(altLatched) } }
+    private var optionLatched = false { didSet { accessoryBar.setOption(optionLatched) } }
+    private var commandLatched = false { didSet { accessoryBar.setCommand(commandLatched) } }
     private var shiftLatched = false { didSet { accessoryBar.setShift(shiftLatched) } }
 
     /// Modifiers latched on the accessory bar, as libghostty mods.
     private var latchedMods: ghostty_input_mods_e {
         var mods = GHOSTTY_MODS_NONE.rawValue
         if ctrlLatched { mods |= GHOSTTY_MODS_CTRL.rawValue }
-        if altLatched { mods |= GHOSTTY_MODS_ALT.rawValue }
+        if optionLatched { mods |= GHOSTTY_MODS_ALT.rawValue }
+        if commandLatched { mods |= GHOSTTY_MODS_SUPER.rawValue }
         if shiftLatched { mods |= GHOSTTY_MODS_SHIFT.rawValue }
         return ghostty_input_mods_e(rawValue: mods)
     }
 
+    /// Whether an accessory bar modifier is waiting for the next key.
+    var hasLatchedModifier: Bool { latchedMods != GHOSTTY_MODS_NONE }
+
     private func clearLatches() {
         ctrlLatched = false
-        altLatched = false
+        optionLatched = false
+        commandLatched = false
         shiftLatched = false
     }
 
     private lazy var accessoryBar = KeyAccessoryBar(target: self)
-
     /// Whether a long-press selection is currently shown.
     private var selectionActive = false
 
@@ -85,6 +126,30 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     /// Modifiers for the current long-press. Shift while a program has
     /// the mouse, so libghostty selects text instead of reporting it.
     private var longPressMods = GHOSTTY_MODS_NONE
+
+    /// Keeps a flicked scroll going after the finger lifts.
+    private lazy var momentum = MomentumScroller { [weak self] delta, phase in
+        self?.momentumScrolled(delta, phase)
+    }
+    /// The keyboard's view of the text since the last Return (or tap, or
+    /// special key). Provisional parts (dictation, an input method's
+    /// marked text) are drawn at the cursor and only sent once final.
+    /// See TerminalTextInput.swift.
+    var composing = ""
+    /// The caret within `composing`, in UTF-16 units.
+    var composingCaret = 0
+    /// How much of `composing` the program has been sent.
+    var composingSent = ""
+    /// The input method's marked (provisional) part of `composing`.
+    var composingMarked: NSRange?
+    /// Whether dictation is running, so its text is held until it ends.
+    var dictating = false
+    weak var inputDelegate: UITextInputDelegate?
+    lazy var tokenizer: UITextInputTokenizer = UITextInputStringTokenizer(textInput: self)
+
+    /// Whether the program had the mouse when the glide started. A glide
+    /// stops if that changes so it doesn't carry into another program.
+    private var momentumCaptured = false
 
     /// Whether the running program has turned on mouse tracking (e.g.
     /// Claude Code's fullscreen TUI, vim with `mouse=a`, htop). Touches
@@ -134,6 +199,9 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         surface = ghostty_surface_new(app, &config)
 
         installGestures()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(inputModeDidChange),
+            name: UITextInputMode.currentInputModeDidChangeNotification, object: nil)
         GhosttyRuntime.shared.register(self)
         reloadConfig()
     }
@@ -147,6 +215,7 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         ghostty_surface_update_config(surface, built.config)
         configDiagnostics = built.diagnostics
         mouseReportingEnabled = built.bool("mouse-reporting") ?? true
+        unfocusedSplitOpacity = built.double("unfocused-split-opacity") ?? 0.7
 
         configFontPoints = built.float("font-size") ?? configFontPoints
         if !fontOverridden { fontPoints = configFontPoints }
@@ -158,9 +227,10 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     /// Scale the font so `targetColumns` cells fit across the portrait
     /// width. Landscape keeps the same font and so shows more columns.
     func fitColumns(force: Bool = false) {
-        guard let surface, let target = targetColumns, bounds.width > 1, bounds.height > 1 else { return }
+        guard let surface, let target = targetColumns,
+              bounds.width > 1, bounds.height > 1 else { return }
         let scale = Double(window?.screen.scale ?? UIScreen.main.scale)
-        let shortSide = Double(min(bounds.width, bounds.height)) * scale
+        let shortSide = Double(fitShortSide) * scale
         let signature = fitSignature(target: target)
         guard force || signature != lastFitSignature else { return }
         lastFitSignature = signature
@@ -198,14 +268,14 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     /// Only the short side matters, so rotating doesn't refit.
     private func fitSignature(target: Int) -> String {
         let scale = window?.screen.scale ?? UIScreen.main.scale
-        return "\(target)|\(Int(min(bounds.width, bounds.height)))|\(scale)"
+        return "\(target)|\(Int(fitShortSide))|\(scale)"
     }
 
     /// Columns that fit across the portrait width at the current font.
     func portraitColumns(shortSide: Double? = nil) -> Int {
         guard let surface else { return 0 }
         let scale = Double(window?.screen.scale ?? UIScreen.main.scale)
-        let short = shortSide ?? Double(min(bounds.width, bounds.height)) * scale
+        let short = shortSide ?? Double(fitShortSide) * scale
         let size = ghostty_surface_size(surface)
         guard size.cell_width_px > 0 else { return 0 }
         return Int(portraitUsableWidth(size, shortSide: short) / Double(size.cell_width_px))
@@ -259,6 +329,7 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
                             UInt(buf.count))
                     }
                 case .exited(let code, let message):
+                    self?.sessionDropped = code == nil
                     if let message { self?.writeNotice(message) }
                     ghostty_surface_session_exited(surface, UInt32(bitPattern: code ?? 1))
                 }
@@ -270,6 +341,7 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
             try await backend.start(size: io.currentSize)
         } catch {
             startError = error
+            startFailed = true
             writeNotice("Connection failed: \(error.localizedDescription)")
             ghostty_surface_session_exited(surface, 1)
         }
@@ -308,7 +380,10 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         // that sublayer doesn't track our bounds automatically.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for sublayer in layer.sublayers ?? [] {
+        // Only libghostty's layer; subviews (the dictation panel) lay
+        // themselves out.
+        let subviewLayers = Set(subviews.map { ObjectIdentifier($0.layer) })
+        for sublayer in layer.sublayers ?? [] where !subviewLayers.contains(ObjectIdentifier(sublayer)) {
             sublayer.frame = bounds
             sublayer.contentsScale = scale
         }
@@ -328,11 +403,14 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
 
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
-        if result, let surface { ghostty_surface_set_focus(surface, true) }
+        if result, let surface {
+            ghostty_surface_set_focus(surface, true)
+        }
         return result
     }
 
     override func resignFirstResponder() -> Bool {
+        commitComposing()
         let result = super.resignFirstResponder()
         if result, let surface { ghostty_surface_set_focus(surface, false) }
         return result
@@ -340,25 +418,35 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
 
     override var inputAccessoryView: UIView? { accessoryBar }
 
-    // MARK: UIKeyInput (software keyboard)
+    // MARK: Software keyboard
 
-    var hasText: Bool { true }
-
+    // A terminal wants exactly what was typed. The default keyboard (not
+    // ASCII-only) is used so the dictation key is offered.
     var autocorrectionType: UITextAutocorrectionType { get { .no } set {} }
     var autocapitalizationType: UITextAutocapitalizationType { get { .none } set {} }
     var smartQuotesType: UITextSmartQuotesType { get { .no } set {} }
     var smartDashesType: UITextSmartDashesType { get { .no } set {} }
     var smartInsertDeleteType: UITextSmartInsertDeleteType { get { .no } set {} }
     var spellCheckingType: UITextSpellCheckingType { get { .no } set {} }
-    var keyboardType: UIKeyboardType { get { .asciiCapable } set {} }
+    var inlinePredictionType: UITextInlinePredictionType { get { .no } set {} }
+    var keyboardType: UIKeyboardType { get { .default } set {} }
 
-    func insertText(_ text: String) {
-        guard let surface else { return }
-        KeyInput.type(text, into: surface, ctrl: ctrlLatched, alt: altLatched, shift: shiftLatched)
+    /// Send typed text to the program, with any latched modifiers unless
+    /// `latched` is false (text the keyboard composed earlier).
+    func typeText(_ text: String, latched: Bool = true) {
+        guard let surface, !text.isEmpty else { return }
+        momentum.stop()
+        guard latched else {
+            KeyInput.type(text, into: surface, ctrl: false, alt: false)
+            return
+        }
+        KeyInput.type(text, into: surface, ctrl: ctrlLatched, alt: optionLatched,
+                      command: commandLatched, shift: shiftLatched)
         clearLatches()
     }
 
-    func deleteBackward() {
+    /// Send a Backspace to the program.
+    func typeBackspace() {
         guard let surface else { return }
         KeyInput.tap(surface, keycode: KeyInput.keycode(.backspace))
     }
@@ -389,6 +477,8 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
 
     private func handlePress(_ press: UIPress, action: ghostty_input_action_e) -> Bool {
         guard let surface, let key = press.key else { return false }
+        momentum.stop()
+        commitComposing()
         let unshifted = key.charactersIgnoringModifiers.unicodeScalars.first?.value ?? 0
         let handled = KeyInput.send(
             to: surface,
@@ -409,7 +499,8 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         guard let surface else { return }
         switch key {
         case .ctrl: ctrlLatched.toggle()
-        case .alt: altLatched.toggle()
+        case .option: optionLatched.toggle()
+        case .command: commandLatched.toggle()
         case .shift: shiftLatched.toggle()
         case .escape: tapLatched(surface, .escape)
         case .tab: tapLatched(surface, .tab)
@@ -418,13 +509,13 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         case .left: tapLatched(surface, .arrowLeft)
         case .right: tapLatched(surface, .arrowRight)
         case .character(let c): insertText(String(c))
-        case .paste: paste(nil)
         case .dismiss: _ = resignFirstResponder()
         }
     }
 
     /// Tap a special key with any latched modifiers (Shift+Tab, Ctrl+←).
-    private func tapLatched(_ surface: ghostty_surface_t, _ usage: KeyInput.Usage) {
+    func tapLatched(_ surface: ghostty_surface_t, _ usage: KeyInput.Usage) {
+        commitComposing()
         KeyInput.tap(surface, keycode: KeyInput.keycode(usage), mods: latchedMods)
         clearLatches()
     }
@@ -472,6 +563,14 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         let translation = gesture.translation(in: self)
         gesture.setTranslation(.zero, in: self)
         touchScroll(by: translation, at: gesture.location(in: self), began: gesture.state == .began)
+        switch gesture.state {
+        case .ended:
+            touchScrollEnded(velocity: CGPoint(x: 0, y: gesture.velocity(in: self).y))
+        case .cancelled, .failed:
+            momentum.stop()
+        default:
+            break
+        }
     }
 
     @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
@@ -484,6 +583,12 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     /// it focuses the terminal or clears the selection.
     func touchTap(at point: CGPoint) {
         guard let surface else { return }
+        momentum.stop()
+        commitComposing()
+        guard isActivePane else {
+            onActivate?()
+            return
+        }
         if mouseCaptured {
             ghostty_surface_mouse_pos(surface, point.x, point.y, GHOSTTY_MODS_NONE)
             ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
@@ -510,16 +615,44 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         guard let surface else { return }
         // Wheel reports carry the pointer position.
         if began {
+            momentum.stop()
             ghostty_surface_mouse_pos(surface, point.x, point.y, GHOSTTY_MODS_NONE)
         }
+        sendScroll(translation, phase: GHOSTTY_MOUSE_MOMENTUM_NONE)
+    }
 
-        // Precision scrolling in points, scaled like the macOS trackpad path.
+    /// The finger lifted: keep gliding at its velocity (points per second).
+    /// `driven` false lets tests step the glide themselves.
+    func touchScrollEnded(velocity: CGPoint, driven: Bool = true) {
+        momentumCaptured = mouseCaptured
+        momentum.start(velocity: velocity, driven: driven)
+    }
+
+    /// Whether a flick is still gliding.
+    var isGliding: Bool { momentum.isGliding }
+
+    /// Advance a glide by one frame (tests; the display link does this).
+    func advanceGlide(dt: Double) { momentum.advance(dt: dt) }
+
+    private func momentumScrolled(_ delta: CGPoint, _ phase: MomentumScroller.Phase) {
+        if phase != .ended, mouseCaptured != momentumCaptured {
+            momentum.stop()
+            return
+        }
+        switch phase {
+        case .began: sendScroll(delta, phase: GHOSTTY_MOUSE_MOMENTUM_BEGAN)
+        case .changed: sendScroll(delta, phase: GHOSTTY_MOUSE_MOMENTUM_CHANGED)
+        case .ended: sendScroll(.zero, phase: GHOSTTY_MOUSE_MOMENTUM_ENDED)
+        }
+    }
+
+    /// Precision scrolling in points, scaled like the macOS trackpad path,
+    /// with the momentum phase in bits 1-3 as macOS sends it.
+    private func sendScroll(_ delta: CGPoint, phase: ghostty_input_mouse_momentum_e) {
+        guard let surface else { return }
         let precisionBit: Int32 = 0b1
-        ghostty_surface_mouse_scroll(
-            surface,
-            Double(translation.x) * 2,
-            Double(translation.y) * 2,
-            precisionBit)
+        let mods = precisionBit | Int32(phase.rawValue) << 1
+        ghostty_surface_mouse_scroll(surface, Double(delta.x) * 2, Double(delta.y) * 2, mods)
     }
 
     /// Pinch to zoom. When the pinch ends, the column count it settled
@@ -527,6 +660,7 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
         switch gesture.state {
         case .began:
+            momentum.stop()
             pinchStartPoints = fontPoints
         case .changed:
             let points = (pinchStartPoints * Float(gesture.scale) * 4).rounded() / 4
@@ -552,6 +686,7 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     func touchLongPress(_ state: UIGestureRecognizer.State, at point: CGPoint) {
         guard let surface else { return }
         if state == .began {
+            momentum.stop()
             longPressMods = mouseCaptured ? GHOSTTY_MODS_SHIFT : GHOSTTY_MODS_NONE
         }
         let mods = longPressMods

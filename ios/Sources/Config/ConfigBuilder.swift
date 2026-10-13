@@ -70,6 +70,12 @@ final class BuiltConfig {
         return ghostty_config_get(config, &value, key, UInt(key.utf8.count)) ? value : nil
     }
 
+    /// For options that are f64 in Ghostty (e.g. `unfocused-split-opacity`).
+    func double(_ key: String) -> Double? {
+        var value: Double = 0
+        return ghostty_config_get(config, &value, key, UInt(key.utf8.count)) ? value : nil
+    }
+
     func uint32(_ key: String) -> UInt32? {
         var value: UInt32 = 0
         return ghostty_config_get(config, &value, key, UInt(key.utf8.count)) ? value : nil

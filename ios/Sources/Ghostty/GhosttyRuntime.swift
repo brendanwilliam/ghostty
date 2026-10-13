@@ -171,7 +171,13 @@ final class GhosttyRuntime {
             return true
 
         default:
-            return false
+            // Tab and split actions go to the pane's workspace.
+            guard let paneAction = PaneAction(action) else { return false }
+            if Thread.isMainThread {
+                return MainActor.assumeIsolated { view.onAction?(paneAction) ?? false }
+            }
+            DispatchQueue.main.async { _ = view.onAction?(paneAction) }
+            return true
         }
     }
 

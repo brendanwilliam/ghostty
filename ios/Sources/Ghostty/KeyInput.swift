@@ -141,6 +141,7 @@ enum KeyInput {
         into surface: ghostty_surface_t,
         ctrl: Bool,
         alt: Bool,
+        command: Bool = false,
         shift: Bool = false
     ) {
         for original in string {
@@ -161,6 +162,7 @@ enum KeyInput {
             var mods: UInt32 = GHOSTTY_MODS_NONE.rawValue
             if ctrl { mods |= GHOSTTY_MODS_CTRL.rawValue }
             if alt { mods |= GHOSTTY_MODS_ALT.rawValue }
+            if command { mods |= GHOSTTY_MODS_SUPER.rawValue }
             if shift || character.isUppercase { mods |= GHOSTTY_MODS_SHIFT.rawValue }
 
             tap(
@@ -168,7 +170,8 @@ enum KeyInput {
                 keycode: usage.map { keycode($0) } ?? 0,
                 mods: ghostty_input_mods_e(rawValue: mods),
                 // With Ctrl held the key itself is encoded (Ctrl+C -> 0x03).
-                text: ctrl ? nil : String(character),
+                // Cmd combinations are shortcuts (Cmd+T, Cmd+V), never text.
+                text: ctrl || command ? nil : String(character),
                 unshifted: unshifted)
         }
     }

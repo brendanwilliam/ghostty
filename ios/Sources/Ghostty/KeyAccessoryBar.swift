@@ -3,15 +3,22 @@ import UIKit
 /// The row of terminal keys shown above the software keyboard.
 final class KeyAccessoryBar: UIInputView {
     enum Key {
-        case escape, ctrl, alt, shift, tab
+        case escape, ctrl, option, command, shift, tab
         case up, down, left, right
         case character(Character)
-        case paste, dismiss
+        case dismiss
+    }
+
+    /// How a key is labeled: text, or an SF Symbol with a spoken name.
+    private enum Face {
+        case text(String)
+        case symbol(String, label: String)
     }
 
     private weak var target: TerminalSurfaceView?
     private var ctrlButton: UIButton?
-    private var altButton: UIButton?
+    private var optionButton: UIButton?
+    private var commandButton: UIButton?
     private var shiftButton: UIButton?
 
     init(target: TerminalSurfaceView) {
@@ -30,34 +37,38 @@ final class KeyAccessoryBar: UIInputView {
     }
 
     func setCtrl(_ on: Bool) { ctrlButton?.isSelected = on }
-    func setAlt(_ on: Bool) { altButton?.isSelected = on }
+    func setOption(_ on: Bool) { optionButton?.isSelected = on }
+    func setCommand(_ on: Bool) { commandButton?.isSelected = on }
     func setShift(_ on: Bool) { shiftButton?.isSelected = on }
 
     private static let titleFont = UIFont.monospacedSystemFont(ofSize: 15, weight: .medium)
+    private static let symbolConfiguration = UIImage.SymbolConfiguration(pointSize: 15, weight: .medium)
     private static let horizontalInset: CGFloat = 10
 
-    /// The width of the `esc` key. Every key is at least this wide, and
-    /// keys showing a single character or symbol are exactly this wide.
+    /// The width of a three-letter key. Every key is at least this wide,
+    /// and keys showing a single character or symbol are exactly this wide.
     static let minKeyWidth: CGFloat = {
         let text = ("esc" as NSString).size(withAttributes: [.font: titleFont])
         return ceil(text.width) + horizontalInset * 2
     }()
 
     private func build() {
-        let keys: [(String, Key)] = [
-            ("esc", .escape),
-            ("ctrl", .ctrl),
-            ("alt", .alt),
-            ("shift", .shift),
-            ("tab", .tab),
-            ("↑", .up),
-            ("↓", .down),
-            ("←", .left),
-            ("→", .right),
-            ("|", .character("|")),
-            ("~", .character("~")),
-            ("-", .character("-")),
-            ("/", .character("/")),
+        // Modifier and special keys use the symbols printed on Apple keyboards.
+        let keys: [(Face, Key)] = [
+            (.symbol("escape", label: "Escape"), .escape),
+            (.symbol("control", label: "Control"), .ctrl),
+            (.symbol("option", label: "Option"), .option),
+            (.symbol("command", label: "Command"), .command),
+            (.symbol("shift", label: "Shift"), .shift),
+            (.symbol("arrow.right.to.line", label: "Tab"), .tab),
+            (.text("↑"), .up),
+            (.text("↓"), .down),
+            (.text("←"), .left),
+            (.text("→"), .right),
+            (.text("|"), .character("|")),
+            (.text("~"), .character("~")),
+            (.text("-"), .character("-")),
+            (.text("/"), .character("/")),
         ]
 
         let stack = UIStackView()
@@ -65,15 +76,17 @@ final class KeyAccessoryBar: UIInputView {
         stack.spacing = 6
         stack.translatesAutoresizingMaskIntoConstraints = false
 
-        for (title, key) in keys {
-            let button = makeButton(title: title, key: key)
-            if case .ctrl = key { ctrlButton = button }
-            if case .alt = key { altButton = button }
-            if case .shift = key { shiftButton = button }
+        for (face, key) in keys {
+            let button = makeButton(face, key: key)
+            switch key {
+            case .ctrl: ctrlButton = button
+            case .option: optionButton = button
+            case .command: commandButton = button
+            case .shift: shiftButton = button
+            default: break
+            }
             stack.addArrangedSubview(button)
         }
-        stack.addArrangedSubview(makeButton(image: "doc.on.clipboard", key: .paste))
-        stack.addArrangedSubview(makeButton(image: "keyboard.chevron.compact.down", key: .dismiss))
 
         let scroll = UIScrollView()
         scroll.showsHorizontalScrollIndicator = false
@@ -81,35 +94,46 @@ final class KeyAccessoryBar: UIInputView {
         scroll.addSubview(stack)
         addSubview(scroll)
 
+        // Hiding the keyboard stays at the right edge, outside the
+        // scrolling keys, so it's always in reach.
+        let dismiss = makeButton(.symbol("keyboard.chevron.compact.down", label: "Hide Keyboard"), key: .dismiss)
+        addSubview(dismiss)
+
         NSLayoutConstraint.activate([
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: dismiss.leadingAnchor, constant: -2),
             scroll.topAnchor.constraint(equalTo: topAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 8),
-            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -8),
+            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -6),
             stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 6),
             stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -6),
             stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor, constant: -12),
+            dismiss.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -8),
+            dismiss.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            dismiss.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
         ])
     }
 
-    private func makeButton(title: String? = nil, image: String? = nil, key: Key) -> UIButton {
+    private func makeButton(_ face: Face, key: Key) -> UIButton {
         var config = UIButton.Configuration.gray()
         config.titleLineBreakMode = .byClipping
         let inset = Self.horizontalInset
         config.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: inset, bottom: 4, trailing: inset)
-        if let title {
+        switch face {
+        case .text(let title):
             var attributed = AttributedString(title)
             attributed.font = Self.titleFont
             config.attributedTitle = attributed
+        case .symbol(let name, _):
+            config.image = UIImage(systemName: name, withConfiguration: Self.symbolConfiguration)
         }
-        if let image { config.image = UIImage(systemName: image) }
 
         let button = UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in
             UIDevice.current.playInputClick()
             self?.target?.accessoryTapped(key)
         })
+        if case .symbol(_, let label) = face { button.accessibilityLabel = label }
         button.configurationUpdateHandler = { button in
             var config = button.configuration
             config?.baseBackgroundColor = button.isSelected ? .tintColor : nil
@@ -117,9 +141,13 @@ final class KeyAccessoryBar: UIInputView {
             button.configuration = config
         }
 
-        // Single characters and icons are exactly as wide as `esc`;
-        // longer labels (ctrl, shift) grow but never get narrower.
-        let isSingleGlyph = image != nil || (title?.count ?? 0) == 1
+        // Single characters and symbols are exactly the minimum width;
+        // longer labels grow but never get narrower.
+        let isSingleGlyph: Bool
+        switch face {
+        case .text(let title): isSingleGlyph = title.count == 1
+        case .symbol: isSingleGlyph = true
+        }
         button.translatesAutoresizingMaskIntoConstraints = false
         let width = isSingleGlyph
             ? button.widthAnchor.constraint(equalToConstant: Self.minKeyWidth)

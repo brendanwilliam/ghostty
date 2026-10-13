@@ -2168,6 +2168,11 @@ pub const CAPI = struct {
         surface.preeditCallback(if (len == 0) null else ptr[0..len]);
     }
 
+    /// Returns true if the program has enabled bracketed paste.
+    export fn ghostty_surface_bracketed_paste(surface: *Surface) bool {
+        return surface.core_surface.bracketedPaste();
+    }
+
     /// Returns true if the surface currently has mouse capturing
     /// enabled.
     export fn ghostty_surface_mouse_captured(surface: *Surface) bool {

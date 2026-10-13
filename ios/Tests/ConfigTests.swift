@@ -283,25 +283,27 @@ final class KeyAccessoryBarTests: XCTestCase {
         bar.layoutIfNeeded()
 
         let buttons = allButtons(in: bar)
-        let titles = buttons.map { $0.configuration?.title ?? $0.configuration?.attributedTitle.map { String($0.characters) } ?? "" }
-        XCTAssertTrue(titles.contains("shift"), "titles: \(titles)")
+        // Symbol keys are named by their accessibility label.
+        let names = buttons.map {
+            $0.accessibilityLabel ?? $0.configuration?.attributedTitle.map { String($0.characters) } ?? ""
+        }
+        XCTAssertEqual(Array(names.prefix(6)), ["Escape", "Control", "Option", "Command", "Shift", "Tab"])
+        XCTAssertFalse(names.contains { $0.localizedCaseInsensitiveContains("paste") }, "names: \(names)")
 
+        // Every key is the same width and never squeezed.
         let minWidth = KeyAccessoryBar.minKeyWidth
         XCTAssertGreaterThan(minWidth, 30)
-        let esc = try XCTUnwrap(zip(titles, buttons).first { $0.0 == "esc" }?.1)
-        XCTAssertEqual(esc.frame.width, minWidth, accuracy: 1)
-
-        for (title, button) in zip(titles, buttons) {
-            XCTAssertGreaterThanOrEqual(button.frame.width + 0.5, minWidth, "\(title) is narrower than esc")
-            if title.count > 1 {
-                // Never squeezed (which would wrap "shift" onto two lines).
-                let natural = button.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize).width
-                XCTAssertGreaterThanOrEqual(button.frame.width + 0.5, natural, "\(title) is squeezed")
-            }
-            if title.count <= 1 {
-                XCTAssertEqual(button.frame.width, minWidth, accuracy: 0.5, "\(title.isEmpty ? "icon" : title) should match esc")
-            }
+        for (name, button) in zip(names, buttons) {
+            XCTAssertEqual(button.frame.width, minWidth, accuracy: 0.5, "\(name) should be the key width")
         }
+
+        // Hide Keyboard is pinned at the right edge, outside the scrolling keys.
+        let hide = try XCTUnwrap(zip(names, buttons).first { $0.0 == "Hide Keyboard" }?.1)
+        XCTAssertTrue(hide.superview === bar)
+        XCTAssertEqual(hide.frame.maxX, bar.bounds.width - 8, accuracy: 0.5)
+        let scroll = try XCTUnwrap(bar.subviews.first { $0 is UIScrollView } as? UIScrollView)
+        XCTAssertLessThanOrEqual(scroll.frame.maxX, hide.frame.minX)
+        XCTAssertGreaterThan(scroll.contentSize.width, scroll.frame.width, "the other keys scroll on a phone")
     }
 
     private func allButtons(in view: UIView) -> [UIButton] {
