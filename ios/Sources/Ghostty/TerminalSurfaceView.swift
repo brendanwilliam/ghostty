@@ -13,6 +13,8 @@ final class TerminalSurfaceView: UIView {
 
     var onTitleChange: ((String) -> Void)?
     var onClose: (() -> Void)?
+    /// Called once, when the session's first output arrives.
+    var onFirstOutput: (() -> Void)?
 
     /// Called when a pinch settles on a new column count.
     var onColumnsSettled: ((Int) -> Void)?
@@ -321,6 +323,10 @@ final class TerminalSurfaceView: UIView {
             for await event in backend.events {
                 switch event {
                 case .output(let data):
+                    if let first = self?.onFirstOutput {
+                        self?.onFirstOutput = nil
+                        first()
+                    }
                     data.withUnsafeBytes { buf in
                         guard let base = buf.baseAddress else { return }
                         ghostty_surface_write_output(
@@ -354,6 +360,12 @@ final class TerminalSurfaceView: UIView {
         guard let surface else { return }
         let text = "\r\n\u{1B}[2m[\(message)]\u{1B}[0m\r\n"
         text.withCString { ghostty_surface_write_output(surface, $0, UInt(strlen($0))) }
+    }
+
+    /// Close the connection, keeping what's on screen. The session ends
+    /// as dropped.
+    func closeBackend() {
+        io.backend.close()
     }
 
     func surfaceRequestedClose() {

@@ -11,6 +11,9 @@ struct TerminalScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let sessions = workspace.sessions {
+                ZmxBanner(sessions: sessions)
+            }
             if workspace.tabs.count > 1 {
                 TabStrip(workspace: workspace)
             }
@@ -34,7 +37,7 @@ struct TerminalScreen: View {
         .navigationTitle(workspace.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if let pane = workspace.focusedPane, pane.ended {
+            if let pane = workspace.focusedPane, pane.ended, !pane.reconnecting {
                 ToolbarItem(placement: .primaryAction) {
                     Button("Reconnect") { workspace.reconnect(pane) }
                 }

@@ -81,6 +81,14 @@ struct HostEditView: View {
                     Text("The host's config (theme, font, colors) is fetched on each connect; Settings override it. Without a custom width, the width from Settings is used. Pinching a terminal sets a custom width.")
                 }
 
+                Section {
+                    Toggle("Keep sessions running", isOn: $host.keepsSessions)
+                } header: {
+                    Text("Sessions")
+                } footer: {
+                    Text("Runs each tab in a zmx session on the host (if zmx is installed there), so it keeps running when the app is closed and comes back when you reopen it.")
+                }
+
                 if let knownFingerprint {
                     Section("Host key") {
                         Text(knownFingerprint)

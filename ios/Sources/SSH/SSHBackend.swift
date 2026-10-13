@@ -44,10 +44,14 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
     private let resizes: AsyncStream<TerminalSize>
     private let resizeContinuation: AsyncStream<TerminalSize>.Continuation
 
+    typealias Runner = RemoteConfigFetcher.Runner
+
     private let host: Host
     private let credentials: SSHCredentials
     private let approveUnknownHostKey: @Sendable (String) async -> Bool
-    private let beforeShell: (@Sendable (@escaping RemoteConfigFetcher.Runner) async -> Void)?
+    private let beforeShell: (@Sendable (@escaping Runner) async -> Void)?
+    private let command: (@Sendable (@escaping Runner) async -> String?)?
+    private let sessionLivesOn: (@Sendable (@escaping Runner) async -> Bool)?
 
     /// How long `beforeShell` may take before the shell opens anyway.
     static let beforeShellTimeout: Duration = .seconds(8)
@@ -62,31 +66,43 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
     /// - Parameter beforeShell: Runs after authentication and before the
     ///   shell opens, with a way to run commands on the host (used to
     ///   fetch the host's Ghostty config). Bounded by `beforeShellTimeout`.
+    /// - Parameter command: Runs next and returns the command to run on
+    ///   the PTY (a zmx attach), or nil for the login shell.
+    /// - Parameter sessionLivesOn: Asked when the command ends by itself
+    ///   while still connected: whether what it attached to is still
+    ///   running on the host (it was detached, not exited). If so, the
+    ///   session is reported dropped, to be attached again.
     init(
         host: Host,
         credentials: SSHCredentials,
         approveUnknownHostKey: @escaping @Sendable (String) async -> Bool,
-        beforeShell: (@Sendable (@escaping RemoteConfigFetcher.Runner) async -> Void)? = nil
+        beforeShell: (@Sendable (@escaping Runner) async -> Void)? = nil,
+        command: (@Sendable (@escaping Runner) async -> String?)? = nil,
+        sessionLivesOn: (@Sendable (@escaping Runner) async -> Bool)? = nil
     ) {
         self.host = host
         self.credentials = credentials
         self.approveUnknownHostKey = approveUnknownHostKey
         self.beforeShell = beforeShell
+        self.command = command
+        self.sessionLivesOn = sessionLivesOn
         (events, eventContinuation) = AsyncStream.makeStream()
         (input, inputContinuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
         (resizes, resizeContinuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
     }
 
-    func start(size: TerminalSize) async throws {
-        defer { eventContinuation.finish() }
-
+    /// Connect and authenticate, checking the host key against
+    /// `KnownHosts`.
+    static func connect(
+        host: Host,
+        credentials: SSHCredentials,
+        approveUnknownHostKey: @escaping @Sendable (String) async -> Bool
+    ) async throws -> SSHClient {
         let validator = TOFUHostKeyValidator(
             endpoint: host.endpoint,
             approve: approveUnknownHostKey)
-
-        let client: SSHClient
         do {
-            client = try await SSHClient.connect(
+            return try await SSHClient.connect(
                 host: host.hostname,
                 port: host.port,
                 authenticationMethod: .custom(KeyThenPasswordAuth(credentials: credentials)),
@@ -103,6 +119,28 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
             }
             throw error
         }
+    }
+
+    /// Run one command on the host over a connection of its own, and
+    /// return its output. Never prompts: an untrusted host key fails.
+    static func run(_ command: String, on host: Host, credentials: SSHCredentials) async throws -> Data {
+        let client = try await connect(host: host, credentials: credentials) { _ in false }
+        defer { Task { try? await client.close() } }
+        return try await runner(client)(command)
+    }
+
+    private static func runner(_ client: SSHClient) -> Runner {
+        { command in
+            let buffer = try await client.executeCommand(command, maxResponseSize: 4 << 20)
+            return Data(buffer: buffer)
+        }
+    }
+
+    func start(size: TerminalSize) async throws {
+        defer { eventContinuation.finish() }
+
+        let client = try await Self.connect(
+            host: host, credentials: credentials, approveUnknownHostKey: approveUnknownHostKey)
 
         let shouldClose: Bool = lock.withLock {
             self.client = client
@@ -110,14 +148,12 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
         }
         if shouldClose {
             try? await client.close()
+            eventContinuation.yield(.exited(code: nil, message: nil))
             return
         }
 
+        let runner = Self.runner(client)
         if let beforeShell {
-            let runner: RemoteConfigFetcher.Runner = { command in
-                let buffer = try await client.executeCommand(command, maxResponseSize: 4 << 20)
-                return Data(buffer: buffer)
-            }
             // Race the hook against the timeout without waiting for the
             // loser: a stuck exec channel must not hold up the shell.
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -132,6 +168,7 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
                 }
             }
         }
+        let remoteCommand = await command?(runner)
 
         let request = SSHChannelRequestEvent.PseudoTerminalRequest(
             wantReply: true,
@@ -144,33 +181,38 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
 
         var exitCode: Int32? = 0
         let outputFinished = ManagedFlag()
-        do {
-            try await client.withPTY(request) { inbound, outbound in
-                try await withThrowingTaskGroup(of: Void.self) { group in
-                    group.addTask { [input] in
-                        for await data in input {
-                            try await outbound.write(ByteBuffer(bytes: data))
-                        }
+        let session: (TTYOutput, TTYStdinWriter) async throws -> Void = { [input, resizes] inbound, outbound in
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask { [input] in
+                    for await data in input {
+                        try await outbound.write(ByteBuffer(bytes: data))
                     }
-                    group.addTask { [resizes] in
-                        for await size in resizes {
-                            try await outbound.changeSize(
-                                cols: size.columns,
-                                rows: size.rows,
-                                pixelWidth: size.widthPixels,
-                                pixelHeight: size.heightPixels)
-                        }
-                    }
-
-                    for try await chunk in inbound {
-                        switch chunk {
-                        case .stdout(let buffer), .stderr(let buffer):
-                            self.eventContinuation.yield(.output(Data(buffer: buffer)))
-                        }
-                    }
-                    outputFinished.set()
-                    group.cancelAll()
                 }
+                group.addTask { [resizes] in
+                    for await size in resizes {
+                        try await outbound.changeSize(
+                            cols: size.columns,
+                            rows: size.rows,
+                            pixelWidth: size.widthPixels,
+                            pixelHeight: size.heightPixels)
+                    }
+                }
+
+                for try await chunk in inbound {
+                    switch chunk {
+                    case .stdout(let buffer), .stderr(let buffer):
+                        self.eventContinuation.yield(.output(Data(buffer: buffer)))
+                    }
+                }
+                outputFinished.set()
+                group.cancelAll()
+            }
+        }
+        do {
+            if let remoteCommand {
+                try await client.withPTY(request, command: remoteCommand, perform: session)
+            } else {
+                try await client.withPTY(request, perform: session)
             }
         } catch let failed as SSHClient.CommandFailed {
             exitCode = Int32(truncatingIfNeeded: failed.exitCode)
@@ -179,15 +221,29 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
             // Citadel's own close fails. That's a normal end of session.
             _ = error
         } catch {
-            exitCode = nil
-            eventContinuation.yield(.exited(code: nil, message: "Disconnected: \(error.localizedDescription)"))
             try? await client.close()
+            // Closed by the app (e.g. going into the background): quietly
+            // dropped, so it can be attached again.
+            let message = isClosed ? nil : "Disconnected: \(error.localizedDescription)"
+            eventContinuation.yield(.exited(code: nil, message: message))
             return
         }
 
+        if isClosed {
+            try? await client.close()
+            eventContinuation.yield(.exited(code: nil, message: nil))
+            return
+        }
+        if let sessionLivesOn, await sessionLivesOn(runner) {
+            try? await client.close()
+            eventContinuation.yield(.exited(code: nil, message: nil))
+            return
+        }
         try? await client.close()
         eventContinuation.yield(.exited(code: exitCode, message: "Connection to \(host.displayName) closed"))
     }
+
+    private var isClosed: Bool { lock.withLock { closed } }
 
     func write(_ data: Data) {
         inputContinuation.yield(data)

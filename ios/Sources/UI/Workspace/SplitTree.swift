@@ -10,7 +10,7 @@ enum SplitDirection: Equatable {
 }
 
 /// How a split arranges its two children.
-enum SplitAxis: Equatable {
+enum SplitAxis: Equatable, Codable {
     /// Side by side, with a vertical divider (Ghostty's split right/left).
     case horizontal
     /// Stacked, with a horizontal divider (Ghostty's split down/up).
@@ -19,8 +19,8 @@ enum SplitAxis: Equatable {
 
 /// The panes of one tab as a binary tree of splits, modeled on the macOS
 /// app's `SplitTree` (macos/Sources/Features/Splits/SplitTree.swift).
-struct SplitTree: Equatable {
-    indirect enum Node: Equatable {
+struct SplitTree: Equatable, Codable {
+    indirect enum Node: Equatable, Codable {
         case leaf(UUID)
         /// `ratio` is the share of the space the first child gets.
         case split(SplitAxis, ratio: Double, first: Node, second: Node)

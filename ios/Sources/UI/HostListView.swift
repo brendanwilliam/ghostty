@@ -7,6 +7,8 @@ struct HostListView: View {
     @State private var editing: Host?
     @State private var showingKey = false
     @State private var showingSettings = false
+    /// A host whose sessions are about to be ended, pending confirmation.
+    @State private var ending: Host?
 
     var body: some View {
         NavigationStack {
@@ -26,17 +28,19 @@ struct HostListView: View {
                                     .foregroundStyle(.secondary)
                                 if let open = workspaces.openWorkspace(for: host) {
                                     OpenSessionsLabel(workspace: open)
+                                } else if let saved = workspaces.savedTabCount(for: host) {
+                                    TabCountLabel(tabs: saved)
                                 }
                             }
                         }
                         .swipeActions {
                             Button("Delete", role: .destructive) {
-                                workspaces.disconnect(host)
+                                workspaces.remove(host)
                                 store.delete(host)
                             }
                             Button("Edit") { editing = host }.tint(.gray)
-                            if workspaces.openWorkspace(for: host) != nil {
-                                Button("Disconnect") { workspaces.disconnect(host) }.tint(.orange)
+                            if workspaces.hasSessions(host) {
+                                Button("End Sessions") { ending = host }.tint(.orange)
                             }
                         }
                     }
@@ -87,6 +91,16 @@ struct HostListView: View {
             .sheet(isPresented: $showingSettings) {
                 SettingsView()
             }
+            .confirmationDialog(
+                "End all sessions on \(ending?.displayName ?? "")?",
+                isPresented: Binding(get: { ending != nil }, set: { if !$0 { ending = nil } }),
+                titleVisibility: .visible,
+                presenting: ending
+            ) { host in
+                Button("End Sessions", role: .destructive) { workspaces.endSessions(host) }
+            } message: { _ in
+                Text("Closes every tab and ends the programs running in them on the host.")
+            }
             .onAppear { bonjour.start() }
             .onDisappear { bonjour.stop() }
         }
@@ -107,7 +121,14 @@ private struct OpenSessionsLabel: View {
     @ObservedObject var workspace: TerminalWorkspace
 
     var body: some View {
-        let tabs = workspace.tabs.count
+        TabCountLabel(tabs: workspace.tabs.count)
+    }
+}
+
+private struct TabCountLabel: View {
+    let tabs: Int
+
+    var body: some View {
         Label(tabs == 1 ? "1 tab open" : "\(tabs) tabs open", systemImage: "circle.fill")
             .labelStyle(OpenSessionsLabelStyle())
             .font(.caption)

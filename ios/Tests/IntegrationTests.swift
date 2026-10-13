@@ -23,7 +23,11 @@ final class FakeBackend: TerminalBackend, @unchecked Sendable {
     func start(size: TerminalSize) async throws {}
     func write(_ data: Data) { lock.withLock { _written.append(data) } }
     func resize(_ size: TerminalSize) { lock.withLock { _sizes.append(size) } }
-    func close() { continuation.finish() }
+    /// Like SSHBackend, closing from our side reports a quiet drop.
+    func close() {
+        continuation.yield(.exited(code: nil, message: nil))
+        continuation.finish()
+    }
 }
 
 /// Wait (without blocking the main run loop) until `condition` holds.
@@ -502,7 +506,7 @@ private final class Counter: @unchecked Sendable {
     func increment() { lock.withLock { count += 1 } }
 }
 
-private extension Data {
+extension Data {
     init(hex: String) {
         self.init()
         var rest = hex[...]
