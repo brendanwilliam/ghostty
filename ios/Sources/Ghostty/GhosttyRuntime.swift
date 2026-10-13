@@ -14,22 +14,38 @@ final class GhosttyRuntime {
     static let shared = GhosttyRuntime()
 
     private(set) var app: ghostty_app_t?
-    private var config: ghostty_config_t?
+
+    /// The app-level config (defaults + the app's overrides).
+    private(set) var config: BuiltConfig?
+
+    /// Live terminals, so config changes apply to open sessions.
+    private let surfaces = NSHashTable<TerminalSurfaceView>.weakObjects()
 
     private init() {
+        // Bundled themes live in <bundle>/GhosttyResources/themes; libghostty
+        // finds them through its resources directory.
+        if let resources = ConfigPaths.resources {
+            setenv("GHOSTTY_RESOURCES_DIR", resources.path, 1)
+        }
+        // Keep libghostty's XDG config lookups inside a writable directory.
+        try? FileManager.default.createDirectory(
+            at: ConfigPaths.overrides.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        setenv("XDG_CONFIG_HOME", ConfigPaths.configHome.path, 1)
+
         if ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) != GHOSTTY_SUCCESS {
             logger.critical("ghostty_init failed")
             return
         }
 
-        guard let cfg = ghostty_config_new() else {
+        Self.migrateLegacyOverrides()
+        Self.removeLegacySeedConfig()
+        guard let built = ConfigBuilder.build(remote: nil) else {
             logger.critical("ghostty_config_new failed")
             return
         }
-        Self.writeDefaultConfigIfNeeded()
-        ghostty_config_load_default_files(cfg)
-        ghostty_config_finalize(cfg)
-        self.config = cfg
+        self.config = built
+        let cfg = built.config
 
         var runtime = ghostty_runtime_config_s(
             userdata: nil,
@@ -89,32 +105,47 @@ final class GhosttyRuntime {
 
     // MARK: Config
 
-    /// The Ghostty config file inside the app sandbox. libghostty loads
-    /// this through its normal XDG lookup ($HOME/.config/ghostty/config.ghostty).
-    static var configURL: URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".config/ghostty/config.ghostty")
+    func register(_ view: TerminalSurfaceView) {
+        surfaces.add(view)
     }
 
-    /// Seed a config with phone-friendly defaults on first launch. Users
-    /// can edit it later (e.g. via the Files app once that is exposed).
-    private static func writeDefaultConfigIfNeeded() {
-        let url = configURL
-        guard !FileManager.default.fileExists(atPath: url.path) else { return }
-        let contents = """
+    /// Rebuild configs after Settings or a host's config changed, and
+    /// apply them to every open terminal.
+    func reloadConfig() {
+        guard let app, let built = ConfigBuilder.build(remote: nil) else { return }
+        // This pushes the app config to every surface; each surface then
+        // re-applies its own layered config (which includes its host's).
+        ghostty_app_update_config(app, built.config)
+        config = built
+        for view in surfaces.allObjects {
+            view.reloadConfig()
+        }
+    }
+
+    /// Move an overrides file from the old `~/.config` location (only
+    /// ever writable on the simulator) to the current one.
+    private static func migrateLegacyOverrides() {
+        let fm = FileManager.default
+        let old = ConfigPaths.legacyOverrides
+        guard fm.fileExists(atPath: old.path),
+              !fm.fileExists(atPath: ConfigPaths.overrides.path) else { return }
+        try? fm.moveItem(at: old, to: ConfigPaths.overrides)
+    }
+
+    /// Version 1 seeded the overrides file with its defaults. Those now
+    /// live in the bundled defaults layer; left in place they would
+    /// override the Mac's config, so remove the untouched seed.
+    private static func removeLegacySeedConfig() {
+        let legacySeed = """
         # Ghostty for iOS configuration. See https://ghostty.org/docs/config
         font-size = 12
         window-padding-x = 4
         window-padding-y = 4
         """
-        do {
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            try contents.write(to: url, atomically: true, encoding: .utf8)
-        } catch {
-            logger.warning("failed to write default config: \(error.localizedDescription)")
-        }
+        let url = ConfigPaths.overrides
+        guard let text = try? String(contentsOf: url, encoding: .utf8),
+              text.trimmingCharacters(in: .whitespacesAndNewlines) == legacySeed else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     // MARK: Actions

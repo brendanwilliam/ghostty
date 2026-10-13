@@ -5,6 +5,7 @@ struct HostListView: View {
     @StateObject private var bonjour = BonjourBrowser()
     @State private var editing: Host?
     @State private var showingKey = false
+    @State private var showingSettings = false
 
     var body: some View {
         NavigationStack {
@@ -51,9 +52,12 @@ struct HostListView: View {
                 TerminalScreen(host: host)
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItemGroup(placement: .topBarLeading) {
                     Button { showingKey = true } label: {
                         Label("Device Key", systemImage: "key")
+                    }
+                    Button { showingSettings = true } label: {
+                        Label("Settings", systemImage: "gearshape")
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -69,6 +73,9 @@ struct HostListView: View {
             }
             .sheet(isPresented: $showingKey) {
                 DeviceKeyView()
+            }
+            .sheet(isPresented: $showingSettings) {
+                SettingsView()
             }
             .onAppear { bonjour.start() }
             .onDisappear { bonjour.stop() }

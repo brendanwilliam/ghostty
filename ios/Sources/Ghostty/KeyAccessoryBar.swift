@@ -3,7 +3,7 @@ import UIKit
 /// The row of terminal keys shown above the software keyboard.
 final class KeyAccessoryBar: UIInputView {
     enum Key {
-        case escape, ctrl, alt, tab
+        case escape, ctrl, alt, shift, tab
         case up, down, left, right
         case character(Character)
         case paste, dismiss
@@ -12,6 +12,7 @@ final class KeyAccessoryBar: UIInputView {
     private weak var target: TerminalSurfaceView?
     private var ctrlButton: UIButton?
     private var altButton: UIButton?
+    private var shiftButton: UIButton?
 
     init(target: TerminalSurfaceView) {
         self.target = target
@@ -30,12 +31,24 @@ final class KeyAccessoryBar: UIInputView {
 
     func setCtrl(_ on: Bool) { ctrlButton?.isSelected = on }
     func setAlt(_ on: Bool) { altButton?.isSelected = on }
+    func setShift(_ on: Bool) { shiftButton?.isSelected = on }
+
+    private static let titleFont = UIFont.monospacedSystemFont(ofSize: 15, weight: .medium)
+    private static let horizontalInset: CGFloat = 10
+
+    /// The width of the `esc` key. Every key is at least this wide, and
+    /// keys showing a single character or symbol are exactly this wide.
+    static let minKeyWidth: CGFloat = {
+        let text = ("esc" as NSString).size(withAttributes: [.font: titleFont])
+        return ceil(text.width) + horizontalInset * 2
+    }()
 
     private func build() {
         let keys: [(String, Key)] = [
             ("esc", .escape),
             ("ctrl", .ctrl),
             ("alt", .alt),
+            ("shift", .shift),
             ("tab", .tab),
             ("↑", .up),
             ("↓", .down),
@@ -56,6 +69,7 @@ final class KeyAccessoryBar: UIInputView {
             let button = makeButton(title: title, key: key)
             if case .ctrl = key { ctrlButton = button }
             if case .alt = key { altButton = button }
+            if case .shift = key { shiftButton = button }
             stack.addArrangedSubview(button)
         }
         stack.addArrangedSubview(makeButton(image: "doc.on.clipboard", key: .paste))
@@ -82,10 +96,12 @@ final class KeyAccessoryBar: UIInputView {
 
     private func makeButton(title: String? = nil, image: String? = nil, key: Key) -> UIButton {
         var config = UIButton.Configuration.gray()
-        config.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10)
+        config.titleLineBreakMode = .byClipping
+        let inset = Self.horizontalInset
+        config.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: inset, bottom: 4, trailing: inset)
         if let title {
             var attributed = AttributedString(title)
-            attributed.font = .monospacedSystemFont(ofSize: 15, weight: .medium)
+            attributed.font = Self.titleFont
             config.attributedTitle = attributed
         }
         if let image { config.image = UIImage(systemName: image) }
@@ -100,6 +116,18 @@ final class KeyAccessoryBar: UIInputView {
             config?.baseForegroundColor = button.isSelected ? .white : .label
             button.configuration = config
         }
+
+        // Single characters and icons are exactly as wide as `esc`;
+        // longer labels (ctrl, shift) grow but never get narrower.
+        let isSingleGlyph = image != nil || (title?.count ?? 0) == 1
+        button.translatesAutoresizingMaskIntoConstraints = false
+        let width = isSingleGlyph
+            ? button.widthAnchor.constraint(equalToConstant: Self.minKeyWidth)
+            : button.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.minKeyWidth)
+        width.isActive = true
+        // Labels stay on one line at their natural width; the bar scrolls.
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        button.titleLabel?.numberOfLines = 1
         return button
     }
 }

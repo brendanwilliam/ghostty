@@ -47,6 +47,10 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
     private let host: Host
     private let credentials: SSHCredentials
     private let approveUnknownHostKey: @Sendable (String) async -> Bool
+    private let beforeShell: (@Sendable (@escaping RemoteConfigFetcher.Runner) async -> Void)?
+
+    /// How long `beforeShell` may take before the shell opens anyway.
+    static let beforeShellTimeout: Duration = .seconds(8)
 
     private let lock = NSLock()
     private var client: SSHClient?
@@ -55,14 +59,19 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
     /// - Parameter approveUnknownHostKey: Called with the server's key
     ///   fingerprint the first time we connect to a host. Return true to
     ///   trust and remember it.
+    /// - Parameter beforeShell: Runs after authentication and before the
+    ///   shell opens, with a way to run commands on the host (used to
+    ///   fetch the host's Ghostty config). Bounded by `beforeShellTimeout`.
     init(
         host: Host,
         credentials: SSHCredentials,
-        approveUnknownHostKey: @escaping @Sendable (String) async -> Bool
+        approveUnknownHostKey: @escaping @Sendable (String) async -> Bool,
+        beforeShell: (@Sendable (@escaping RemoteConfigFetcher.Runner) async -> Void)? = nil
     ) {
         self.host = host
         self.credentials = credentials
         self.approveUnknownHostKey = approveUnknownHostKey
+        self.beforeShell = beforeShell
         (events, eventContinuation) = AsyncStream.makeStream()
         (input, inputContinuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
         (resizes, resizeContinuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -102,6 +111,26 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
         if shouldClose {
             try? await client.close()
             return
+        }
+
+        if let beforeShell {
+            let runner: RemoteConfigFetcher.Runner = { command in
+                let buffer = try await client.executeCommand(command, maxResponseSize: 4 << 20)
+                return Data(buffer: buffer)
+            }
+            // Race the hook against the timeout without waiting for the
+            // loser: a stuck exec channel must not hold up the shell.
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let once = OneShot()
+                Task {
+                    await beforeShell(runner)
+                    if once.claim() { continuation.resume() }
+                }
+                Task {
+                    try? await Task.sleep(for: Self.beforeShellTimeout)
+                    if once.claim() { continuation.resume() }
+                }
+            }
         }
 
         let request = SSHChannelRequestEvent.PseudoTerminalRequest(
@@ -187,6 +216,18 @@ private final class ManagedFlag: @unchecked Sendable {
     private var value = false
     var isSet: Bool { lock.withLock { value } }
     func set() { lock.withLock { value = true } }
+}
+
+/// Lets exactly one of several racing callers win.
+private final class OneShot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+    func claim() -> Bool {
+        lock.withLock {
+            defer { claimed = true }
+            return !claimed
+        }
+    }
 }
 
 /// Offers the device key first, then a password if one was provided.
