@@ -15,8 +15,14 @@ pub inline fn home(io: std.Io, environ_map: *const std.process.Environ.Map, buf:
         .linux, .freebsd, .macos => try homeUnix(io, environ_map, buf),
         .windows => homeWindows(environ_map, buf) catch return error.BufferTooSmall,
 
-        // iOS doesn't have a user-writable home directory
-        .ios => null,
+        // iOS apps have no user home, but HOME points at the app's
+        // writable sandbox container, which is where config lives.
+        .ios => ios: {
+            const result = environ_map.get("HOME") orelse break :ios null;
+            if (buf.len < result.len) return Error.BufferTooSmall;
+            @memcpy(buf[0..result.len], result);
+            break :ios buf[0..result.len];
+        },
 
         else => @compileError("unimplemented"),
     };

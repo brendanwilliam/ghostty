@@ -1,0 +1,10 @@
+// Shared build settings for the iOS app. Signing and the bundle
+// identifier come from Local.xcconfig, which is not checked in.
+// Copy Local.xcconfig.example to Local.xcconfig to get started.
+GHOSTTY_IOS_BUNDLE_ID = com.example.ghostty-ios
+PRODUCT_BUNDLE_IDENTIFIER = $(GHOSTTY_IOS_BUNDLE_ID)
+PRODUCT_NAME = Ghostty
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+CODE_SIGN_STYLE = Automatic
+#include? "Local.xcconfig"
