@@ -63,6 +63,22 @@ ghostty +show-config --default > /tmp/defaults.txt
 ios/scripts/gen-config-catalog.py /tmp/webdata/share/ghostty/webdata/config.mdx /tmp/defaults.txt > ios/Resources/ConfigCatalog.json
 ```
 
+## Touch
+
+When the running program tracks the mouse (Claude Code's `/tui fullscreen`,
+vim with `mouse=a`, htop, tmux, and others), touches are sent to it as mouse
+events. libghostty encodes them in whatever format the program asked for.
+
+| Gesture | Mouse-aware program | Otherwise |
+| --- | --- | --- |
+| Tap | Click at that cell (the keyboard isn't touched) | Show the keyboard, or clear the selection |
+| One-finger drag | Mouse wheel | Scrollback (arrow keys in pagers like `less`) |
+| Long-press and drag | Select text (sent with Shift, so the program doesn't see it) | Select text |
+| Two-finger tap | Show or hide the keyboard | Show or hide the keyboard |
+| Pinch | Zoom | Zoom |
+
+Setting `mouse-reporting = false` in Settings turns this off.
+
 ## Connect to your Mac
 
 1. On the Mac, turn on **System Settings → General → Sharing → Remote Login**.

@@ -155,6 +155,110 @@ final class SurfaceFeatureTests: XCTestCase {
     }
 }
 
+/// Touches become mouse events for programs that track the mouse (Claude
+/// Code's fullscreen TUI, vim `mouse=a`, htop, tmux...).
+@MainActor
+final class TouchMouseTests: XCTestCase {
+    private var view: TerminalSurfaceView!
+    private var backend: FakeBackend!
+    private var run: Task<Void, Never>?
+
+    override func setUp() async throws {
+        let app = try XCTUnwrap(GhosttyRuntime.shared.app)
+        backend = FakeBackend()
+        view = TerminalSurfaceView(app: app, backend: backend)
+        view.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
+        view.layoutIfNeeded()
+        let view = view!
+        run = Task { await view.run() }
+    }
+
+    override func tearDown() async throws {
+        backend.continuation.finish()
+        _ = await run?.value
+    }
+
+    private var written: String { String(decoding: backend.written, as: UTF8.self) }
+
+    /// Have the "program" print `modes` and wait until the terminal has
+    /// processed it (it answers the trailing status report).
+    private func programSets(_ modes: String) async {
+        backend.continuation.yield(.output(Data((modes + "\u{1B}[5n").utf8)))
+        let ready = await waitUntil { self.written.contains("\u{1B}[0n") }
+        XCTAssertTrue(ready, "terminal didn't process the mode change")
+    }
+
+    /// The middle of a cell, 1-based like mouse reports, in points.
+    private func center(column: Int, row: Int) throws -> CGPoint {
+        let size = ghostty_surface_size(try XCTUnwrap(view.surface))
+        // The surface's scale (the view isn't in a window here).
+        let scale = UIScreen.main.scale
+        let cellWidth = CGFloat(size.cell_width_px) / scale
+        let cellHeight = CGFloat(size.cell_height_px) / scale
+        // The bundled defaults pad 4pt on the left/top; any leftover
+        // width goes to the right/bottom.
+        return CGPoint(x: 4 + (CGFloat(column) - 0.5) * cellWidth,
+                       y: 4 + (CGFloat(row) - 0.5) * cellHeight)
+    }
+
+    func testTapIsAClickWhenTheProgramTracksTheMouse() async throws {
+        await programSets("\u{1B}[?1000h\u{1B}[?1006h")
+        XCTAssertTrue(view.mouseCaptured)
+
+        view.touchTap(at: try center(column: 5, row: 3))
+        let clicked = await waitUntil {
+            self.written.contains("\u{1B}[<0;5;3M") && self.written.contains("\u{1B}[<0;5;3m")
+        }
+        XCTAssertTrue(clicked, "wrote \(written.debugDescription)")
+    }
+
+    func testTapIsNotReportedWithoutMouseTracking() async throws {
+        await programSets("")
+        XCTAssertFalse(view.mouseCaptured)
+        view.touchTap(at: try center(column: 5, row: 3))
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertFalse(written.contains("\u{1B}[<") || written.contains("\u{1B}[M"),
+                       "wrote \(written.debugDescription)")
+    }
+
+    func testTapUsesTheProgramsMouseFormat() async throws {
+        // Plain X10-style encoding (no SGR): ESC [ M, then button,
+        // column and row each offset by 32.
+        await programSets("\u{1B}[?1000h")
+        view.touchTap(at: try center(column: 5, row: 3))
+        let press = "\u{1B}[M" + String(UnicodeScalar(32 + 0)!) + String(UnicodeScalar(32 + 5)!) + String(UnicodeScalar(32 + 3)!)
+        let clicked = await waitUntil { self.written.contains(press) }
+        XCTAssertTrue(clicked, "wrote \(written.debugDescription)")
+    }
+
+    func testDragScrollsTheProgramWithWheelEvents() async throws {
+        await programSets("\u{1B}[?1000h\u{1B}[?1006h")
+        let size = ghostty_surface_size(try XCTUnwrap(view.surface))
+        let cellHeight = CGFloat(size.cell_height_px) / UIScreen.main.scale
+        let start = try center(column: 10, row: 8)
+
+        // Finger moves down: content scrolls up (wheel up, button 64).
+        view.touchScroll(by: .zero, at: start, began: true)
+        view.touchScroll(by: CGPoint(x: 0, y: cellHeight * 3), at: start, began: false)
+        let wheeled = await waitUntil { self.written.contains("\u{1B}[<64;10;8M") }
+        XCTAssertTrue(wheeled, "wrote \(written.debugDescription)")
+    }
+
+    func testLongPressSelectsTextInsteadOfReporting() async throws {
+        await programSets("hello world\u{1B}[?1002h\u{1B}[?1006h")
+        let before = backend.written.count
+
+        view.touchLongPress(.began, at: try center(column: 1, row: 1))
+        view.touchLongPress(.changed, at: try center(column: 8, row: 1))
+        view.touchLongPress(.ended, at: try center(column: 8, row: 1))
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        let after = String(decoding: backend.written.dropFirst(before), as: UTF8.self)
+        XCTAssertFalse(after.contains("\u{1B}[<"), "long-press was reported: \(after.debugDescription)")
+        XCTAssertTrue(ghostty_surface_has_selection(try XCTUnwrap(view.surface)))
+    }
+}
+
 /// Shows a terminal full screen with sample output and holds it so a
 /// screenshot can be taken (`xcrun simctl io booted screenshot`).
 /// Skipped unless GHOSTTY_TEST_VISUAL is set.

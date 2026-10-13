@@ -79,6 +79,21 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     /// Whether a long-press selection is currently shown.
     private var selectionActive = false
 
+    /// The `mouse-reporting` config. When false, programs never see touches.
+    private var mouseReportingEnabled = true
+
+    /// Modifiers for the current long-press. Shift while a program has
+    /// the mouse, so libghostty selects text instead of reporting it.
+    private var longPressMods = GHOSTTY_MODS_NONE
+
+    /// Whether the running program has turned on mouse tracking (e.g.
+    /// Claude Code's fullscreen TUI, vim with `mouse=a`, htop). Touches
+    /// are then sent to it as mouse events.
+    var mouseCaptured: Bool {
+        guard let surface, mouseReportingEnabled else { return false }
+        return ghostty_surface_mouse_captured(surface)
+    }
+
     static func from(_ userdata: UnsafeMutableRawPointer?) -> TerminalSurfaceView? {
         guard let userdata else { return nil }
         return Unmanaged<TerminalSurfaceView>.fromOpaque(userdata).takeUnretainedValue()
@@ -131,6 +146,7 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         guard let surface, let built = ConfigBuilder.build(remote: remoteConfig) else { return }
         ghostty_surface_update_config(surface, built.config)
         configDiagnostics = built.diagnostics
+        mouseReportingEnabled = built.bool("mouse-reporting") ?? true
 
         configFontPoints = built.float("font-size") ?? configFontPoints
         if !fontOverridden { fontPoints = configFontPoints }
@@ -416,7 +432,12 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
     // MARK: Gestures
 
     private func installGestures() {
-        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
+        let twoFingerTap = UITapGestureRecognizer(target: self, action: #selector(handleTwoFingerTap))
+        twoFingerTap.numberOfTouchesRequired = 2
+        addGestureRecognizer(twoFingerTap)
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        tap.require(toFail: twoFingerTap)
         addGestureRecognizer(tap)
 
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
@@ -433,10 +454,46 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         addInteraction(UIEditMenuInteraction(delegate: self))
     }
 
-    @objc private func handleTap() {
+    @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
+        touchTap(at: gesture.location(in: self))
+    }
+
+    /// Two fingers toggle the keyboard. A one-finger tap can't while a
+    /// program has the mouse, because there it's a click.
+    @objc private func handleTwoFingerTap() {
         if isFirstResponder {
+            _ = resignFirstResponder()
+        } else {
+            _ = becomeFirstResponder()
+        }
+    }
+
+    @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
+        let translation = gesture.translation(in: self)
+        gesture.setTranslation(.zero, in: self)
+        touchScroll(by: translation, at: gesture.location(in: self), began: gesture.state == .began)
+    }
+
+    @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+        touchLongPress(gesture.state, at: gesture.location(in: self))
+    }
+
+    // MARK: Touch as mouse
+
+    /// A tap is a left click when a program tracks the mouse. Otherwise
+    /// it focuses the terminal or clears the selection.
+    func touchTap(at point: CGPoint) {
+        guard let surface else { return }
+        if mouseCaptured {
+            ghostty_surface_mouse_pos(surface, point.x, point.y, GHOSTTY_MODS_NONE)
+            ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
+            ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
+            selectionActive = false
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        } else if isFirstResponder {
             // A tap while focused clears any selection.
-            if selectionActive, let surface {
+            if selectionActive {
+                ghostty_surface_mouse_pos(surface, point.x, point.y, GHOSTTY_MODS_NONE)
                 ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
                 ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
                 selectionActive = false
@@ -446,10 +503,15 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         }
     }
 
-    @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
+    /// A one-finger drag scrolls. libghostty decides what that means:
+    /// wheel reports to a program tracking the mouse, arrow keys in an
+    /// alternate-screen pager, or scrollback otherwise.
+    func touchScroll(by translation: CGPoint, at point: CGPoint, began: Bool) {
         guard let surface else { return }
-        let translation = gesture.translation(in: self)
-        gesture.setTranslation(.zero, in: self)
+        // Wheel reports carry the pointer position.
+        if began {
+            ghostty_surface_mouse_pos(surface, point.x, point.y, GHOSTTY_MODS_NONE)
+        }
 
         // Precision scrolling in points, scaled like the macOS trackpad path.
         let precisionBit: Int32 = 0b1
@@ -484,17 +546,24 @@ final class TerminalSurfaceView: UIView, UIKeyInput {
         }
     }
 
-    @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+    /// Long-press and drag selects text. While a program tracks the
+    /// mouse this is sent with Shift, which libghostty treats as "select
+    /// instead of reporting" (unless the program asked for Shift too).
+    func touchLongPress(_ state: UIGestureRecognizer.State, at point: CGPoint) {
         guard let surface else { return }
-        let point = gesture.location(in: self)
-        ghostty_surface_mouse_pos(surface, point.x, point.y, GHOSTTY_MODS_NONE)
+        if state == .began {
+            longPressMods = mouseCaptured ? GHOSTTY_MODS_SHIFT : GHOSTTY_MODS_NONE
+        }
+        let mods = longPressMods
+        ghostty_surface_mouse_pos(surface, point.x, point.y, mods)
 
-        switch gesture.state {
+        switch state {
         case .began:
-            ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
+            ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, mods)
             UISelectionFeedbackGenerator().selectionChanged()
         case .ended, .cancelled:
-            ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, GHOSTTY_MODS_NONE)
+            ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, mods)
+            longPressMods = GHOSTTY_MODS_NONE
             selectionActive = ghostty_surface_has_selection(surface)
             if let interaction = interactions.compactMap({ $0 as? UIEditMenuInteraction }).first {
                 interaction.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
