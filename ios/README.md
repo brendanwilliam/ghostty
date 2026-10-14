@@ -158,9 +158,11 @@ so the project pins a fork of Citadel 0.12.0 with `withPTY(_:command:)`.
 ## Connect to your Mac
 
 1. On the Mac, turn on **System Settings → General → Sharing → Remote Login**.
-2. In the app, tap the key icon and copy this device's public key. Then append
-   it to `~/.ssh/authorized_keys` on the Mac, e.g. with Universal Clipboard:
-   `pbpaste >> ~/.ssh/authorized_keys`.
+2. In the app, tap the key icon and **Copy Command** (the button turns into a
+   green "Copied"). Paste it into Terminal on the Mac, e.g. with Universal
+   Clipboard, and press Return. It adds this device's public key to
+   `~/.ssh/authorized_keys` (creating the folder and file with the right
+   permissions if needed) and says "Key added", or that it already was.
 3. Add the Mac. It shows up under **On this network** through Bonjour, or you
    can enter its hostname (`Your-Mac.local`) and your username.
 4. On the first connection, compare the host key fingerprint with the output
