@@ -89,9 +89,7 @@ struct ZmxInstallSheet: View {
                 }
                 if !sessions.available {
                     Section("Or on the host") {
-                        Text("brew install neurosnap/tap/zmx")
-                            .font(.callout.monospaced())
-                            .textSelection(.enabled)
+                        CodeBlock(text: "brew install neurosnap/tap/zmx")
                         Link("Other ways to install", destination: URL(string: "https://zmx.sh")!)
                     }
                 }

@@ -26,30 +26,15 @@ struct DeviceKeyView: View {
                     Section {
                         Text("1. On the Mac, open System Settings → General → Sharing and turn on Remote Login.")
                         Text("2. Copy this command, then paste it into Terminal on the Mac and press Return. (Universal Clipboard or AirDrop can carry it across.)")
-                        HStack {
-                            // A new key is a new command: start over.
-                            CopyButton(title: "Copy Command", text: command)
-                                .id(command)
-                            Spacer()
-                            Button {
-                                showingCommand = true
-                            } label: {
-                                Image(systemName: "info.circle")
-                                    .imageScale(.large)
-                            }
-                            .accessibilityLabel("Show command")
-                        }
-                        // Two buttons in one row: tap each, not the row.
-                        .buttonStyle(.borderless)
+                        CodeBlock(text: command)
+                            .id(command) // a new key is a new command
+                        Button("Show full command") { showingCommand = true }
                     } header: {
                         Text("Set up your Mac")
                     }
 
                     Section {
-                        Text(DeviceKey.masked(publicKeyLine))
-                            .font(.caption.monospaced())
-                            .accessibilityLabel("Public key, partly hidden")
-                        CopyButton(title: "Copy Public Key", text: publicKeyLine)
+                        CodeBlock(text: publicKeyLine, display: DeviceKey.masked(publicKeyLine), wraps: true)
                             .id(publicKeyLine)
                         Button("Regenerate Key", role: .destructive) {
                             confirmingRegenerate = true
@@ -112,10 +97,7 @@ private struct CommandSheet: View {
         NavigationStack {
             List {
                 Section {
-                    Text(command)
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                    CopyButton(title: "Copy Command", text: command)
+                    CodeBlock(text: command, wraps: true)
                 } footer: {
                     Text("Run on the Mac, it creates ~/.ssh and authorized_keys if needed, adds this device's public key unless it's already there, and says what it did. It contains no private key.")
                 }
@@ -129,38 +111,5 @@ private struct CommandSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
-    }
-}
-
-/// Copies `text` to the pasteboard and says so: the label turns into a
-/// green "Copied" with a checkmark for two seconds, with a haptic.
-struct CopyButton: View {
-    let title: String
-    let text: String
-
-    /// How long the button says "Copied".
-    static let confirmation: Duration = .seconds(2)
-
-    @State private var copied = false
-    /// Counts copies, so tapping again restarts the two seconds.
-    @State private var copies = 0
-
-    var body: some View {
-        Button {
-            UIPasteboard.general.string = text
-            copies += 1
-            withAnimation(.easeInOut(duration: 0.15)) { copied = true }
-        } label: {
-            Label(copied ? "Copied" : title, systemImage: copied ? "checkmark" : "doc.on.doc")
-                .foregroundStyle(copied ? Color.green : Color.accentColor)
-                .contentTransition(.symbolEffect(.replace))
-        }
-        .sensoryFeedback(.success, trigger: copies)
-        .task(id: copies) {
-            guard copies > 0 else { return }
-            do { try await Task.sleep(for: Self.confirmation) } catch { return }
-            withAnimation(.easeInOut(duration: 0.15)) { copied = false }
-        }
-        .accessibilityLabel(copied ? "Copied" : title)
     }
 }

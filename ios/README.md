@@ -158,8 +158,9 @@ so the project pins a fork of Citadel 0.12.0 with `withPTY(_:command:)`.
 ## Connect to your Mac
 
 1. On the Mac, turn on **System Settings → General → Sharing → Remote Login**.
-2. In the app, tap the key icon and **Copy Command** (the button turns into a
-   green "Copied"; the info button shows the command in full). Paste it into
+2. In the app, tap the key icon and the copy icon on the command (it turns into a
+   green checkmark; "Show full command" shows it in full). Every command in the
+   app that you're meant to copy looks and works the same way. Paste it into
    Terminal on the Mac, e.g. with Universal Clipboard, and press Return. It
    adds this device's public key to `~/.ssh/authorized_keys` (creating the
    folder and file with the right permissions if needed) and says "Key

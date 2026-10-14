@@ -47,9 +47,7 @@ struct SleepBanner: View {
                     Text("Its sessions pause and this phone can't reach it while it's asleep. To keep it awake on power, run this on it:")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("sudo pmset -c sleep 0")
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
+                    CodeBlock(text: "sudo pmset -c sleep 0")
                 }
                 Spacer(minLength: 0)
                 Button {
