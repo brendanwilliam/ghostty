@@ -17,6 +17,26 @@ final class DeviceKeyTests: XCTestCase {
         XCTAssertFalse(command.contains("pbpaste"), "nothing to copy first")
     }
 
+    func testTheShownKeyHidesMostOfIt() {
+        let line = DeviceKey.authorizedKeysLine(for: key, comment: "ghostty-ios@Brendans-iPhone")
+        let blob = line.split(separator: " ")[1]
+        let masked = DeviceKey.masked(line)
+
+        XCTAssertTrue(masked.hasPrefix("ssh-ed25519 ••••••••••••••••"), masked)
+        XCTAssertTrue(masked.hasSuffix(" ghostty-ios@Brendans-iPhone"), masked)
+        XCTAssertTrue(masked.contains(blob.suffix(6)), "the end, to recognize it")
+        XCTAssertFalse(masked.contains(blob.prefix(24)), "the start is hidden")
+        XCTAssertFalse(masked.contains(blob), "never the whole key")
+        XCTAssertLessThan(masked.count, line.count - 40)
+    }
+
+    func testMaskingNeverShowsAMalformedKey() {
+        XCTAssertEqual(DeviceKey.masked("garbage"), "••••••••••••••••")
+        XCTAssertEqual(DeviceKey.masked(""), "••••••••••••••••")
+        XCTAssertEqual(DeviceKey.masked("ssh-ed25519 abcd me"), "ssh-ed25519 •••••••••••••••• me",
+                       "a short blob isn't shown at all")
+    }
+
     func testTheCommandCarriesOnlyThePublicKey() {
         let command = DeviceKey.authorizeCommand(for: key, comment: DeviceKey.defaultComment)
         let privateKey = key.rawRepresentation.base64EncodedString()

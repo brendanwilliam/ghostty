@@ -46,6 +46,19 @@ enum DeviceKey {
             + "printf '%s\\n' \(ZmxSession.quote(line)) >> \(file) && echo 'Key added. You can connect now.'; fi"
     }
 
+    /// An `authorized_keys` line with most of the key hidden, safe to show
+    /// on a screen others might see: the type, the last few characters (to
+    /// recognize it), and the comment. (Every Ed25519 key starts with the
+    /// same characters, so showing the start would reveal nothing.)
+    static func masked(_ line: String, visible: Int = 6) -> String {
+        let parts = line.split(separator: " ", maxSplits: 2).map(String.init)
+        guard parts.count >= 2 else { return String(repeating: "•", count: 16) }
+        let blob = parts[1]
+        let hidden = String(repeating: "•", count: 16)
+        let shown = blob.count > visible * 2 ? hidden + blob.suffix(visible) : hidden
+        return ([parts[0], shown] + parts.dropFirst(2)).joined(separator: " ")
+    }
+
     /// SHA256 fingerprint in OpenSSH's format, for display.
     static func fingerprint(for key: Curve25519.Signing.PrivateKey) -> String {
         OpenSSH.fingerprint(blob: OpenSSH.publicKeyBlob(ed25519: key.publicKey.rawRepresentation))
