@@ -158,9 +158,16 @@ so the project pins a fork of Citadel 0.12.0 with `withPTY(_:command:)`.
 ## Connect to your Mac
 
 1. On the Mac, turn on **System Settings → General → Sharing → Remote Login**.
-2. In the app, tap the key icon and copy this device's public key. Then append
-   it to `~/.ssh/authorized_keys` on the Mac, e.g. with Universal Clipboard:
-   `pbpaste >> ~/.ssh/authorized_keys`.
+2. In the app, tap the key icon and the copy icon on the command (it turns into a
+   green checkmark; "Show full command" shows it in full). Every command in the
+   app that you're meant to copy looks and works the same way. Paste it into
+   Terminal on the Mac, e.g. with Universal Clipboard, and press Return. It
+   adds this device's public key to `~/.ssh/authorized_keys` (creating the
+   folder and file with the right permissions if needed, and skipping the key
+   if it's already there) and prints "✓ Connected". The key is hidden on the
+   screen until you tap the eye icon, so screenshots are safe; copying works
+   either way. The **SSH key** section shows the same for the key itself, and
+   can generate a new one.
 3. Add the Mac. It shows up under **On this network** through Bonjour, or you
    can enter its hostname (`Your-Mac.local`) and your username.
 4. On the first connection, compare the host key fingerprint with the output
@@ -168,6 +175,43 @@ so the project pins a fork of Citadel 0.12.0 with `withPTY(_:command:)`.
 
 If the server refuses the key, the app asks for a password. A password can
 also be saved per host in the Keychain.
+
+## Away from home and changing networks
+
+Away from home (cellular, another Wi-Fi network) the Mac sits behind your
+router and can't be reached directly. [`deploy/headscale`](deploy/headscale)
+sets up [Headscale](https://github.com/juanfont/headscale), the open-source
+Tailscale coordination server, on a small server of your own. Your Mac and
+iPhone then join a private tailnet and reach each other from anywhere,
+directly or through your server's relay (end-to-end encrypted either way).
+Follow [its README](deploy/headscale/README.md).
+
+- **Routes.** Once connected, the app learns the Mac's other addresses from it
+  (its tailnet address and its `.local` name; see **Other addresses** in host
+  settings). Each connection races them, tailnet first when this phone's
+  tunnel is up, the next starting 300 ms after the one before; the first to
+  connect wins. Every address must present the host key trusted for the Mac
+  (keys are pinned per host, not per address), so a different machine
+  answering on one is refused.
+- **Changing networks.** A connection over the tailnet keeps its address as
+  the phone moves between Wi-Fi and cellular, so it usually carries on. The app
+  watches the network (Network.framework, with TCP keepalives) and, when it
+  changes, drops connections that can't have survived (a local-network route
+  once off Wi-Fi) and checks the rest. Dropped panes attach to their zmx
+  sessions again over whatever route works now.
+- **Moving without a gap.** When the tunnel comes up (and stays up for 5 s),
+  or a better network appears, panes not on the tailnet move onto it: a second
+  connection attaches to the same zmx session, and once zmx has redrawn the
+  screen it takes over and the old one is closed. Keys go to the old
+  connection until then, so none are lost or sent twice.
+- If the Mac can only be reached through the tailnet and this phone's tunnel
+  is off, a banner says to turn on Tailscale.
+- **Sleep.** An asleep Mac can't be reached and its sessions pause. The app
+  keeps the Mac awake while a phone is attached (`caffeinate -i`), and shows a
+  tip if it sleeps when idle: `sudo pmset -c sleep 0` keeps it awake on power.
+
+The Network.framework transport needs one more addition to the Citadel fork,
+`SSHClient.connect(to:bootstrap:prehandlers:)`.
 
 ## Architecture
 
@@ -192,8 +236,10 @@ SwiftUI (UI/)  ──►  TerminalSurfaceView (Ghostty/)  ──►  libghostty 
 - **Keys.** An Ed25519 device key is generated with CryptoKit and stored in
   the Keychain (`AfterFirstUnlockThisDeviceOnly`, not synced).
 - **Host keys.** Host keys are trusted on first use after you confirm the
-  fingerprint. A changed key fails the connection; you have to forget the
-  old key in host settings before connecting again.
+  fingerprint, and pinned to the saved host, so every route to it must
+  present the same key. A changed key fails the connection; you have to
+  forget the old key in host settings before connecting again. Changing a
+  host's address in its settings starts over, as for a new host.
 
 ## Tests
 
@@ -214,7 +260,9 @@ xcodebuild test ...
 ```
 
 With zmx installed on that host, `TEST_RUNNER_GHOSTTY_TEST_ZMX=1` also runs
-a session through a dropped connection and back.
+a session through a dropped connection and back, and moves one to a second
+connection. The route tests need the sshd to listen on both `127.0.0.1` and
+`::1` (`ListenAddress` twice).
 
 To also test the config fetch, add `SetEnv XDG_CONFIG_HOME=<fixture>` to that
 sshd's config. The fixture's `ghostty/config` should set

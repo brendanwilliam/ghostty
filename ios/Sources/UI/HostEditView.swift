@@ -89,13 +89,27 @@ struct HostEditView: View {
                     Text("Runs each tab in a zmx session on the host (if zmx is installed there), so it keeps running when the app is closed and comes back when you reopen it.")
                 }
 
+                if !host.learnedRoutes.isEmpty {
+                    Section {
+                        ForEach(host.learnedRoutes, id: \.key) { route in
+                            LabeledContent(route.kind.label, value: route.address)
+                                .textSelection(.enabled)
+                        }
+                        .onDelete { host.learnedRoutes.remove(atOffsets: $0) }
+                    } header: {
+                        Text("Other addresses")
+                    } footer: {
+                        Text("Learned from the host. The tailnet address is tried first, so the terminal keeps working away from home and as the phone switches networks. Every address must present the same host key.")
+                    }
+                }
+
                 if let knownFingerprint {
                     Section("Host key") {
                         Text(knownFingerprint)
                             .font(.caption.monospaced())
                             .textSelection(.enabled)
                         Button("Forget host key", role: .destructive) {
-                            KnownHosts.shared.forget(endpoint: host.endpoint)
+                            KnownHosts.shared.forget(host: host)
                             self.knownFingerprint = nil
                         }
                     }
@@ -112,7 +126,7 @@ struct HostEditView: View {
                 }
             }
             .onAppear {
-                knownFingerprint = KnownHosts.shared.fingerprint(endpoint: host.endpoint)
+                knownFingerprint = KnownHosts.shared.fingerprint(host: host)
             }
         }
     }
@@ -120,6 +134,12 @@ struct HostEditView: View {
     private func save() {
         host.hostname = host.hostname.trimmingCharacters(in: .whitespaces)
         host.username = host.username.trimmingCharacters(in: .whitespaces)
+        // A new address may be a different machine: start over with its
+        // key and addresses, as for a new host.
+        if let saved = store.hosts.first(where: { $0.id == host.id }), saved.endpoint != host.endpoint {
+            KnownHosts.shared.forget(host: saved)
+            host.learnedRoutes = []
+        }
         if host.savesPassword {
             if !password.isEmpty {
                 try? Keychain.write(Data(password.utf8), for: host.passwordAccount)

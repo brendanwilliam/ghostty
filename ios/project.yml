@@ -6,11 +6,12 @@ options:
 packages:
   # 0.12.0 rather than 0.12.1: 0.12.1 swapped its SSH implementation to
   # an unvetted third-party fork of swift-nio-ssh. Pinned to a fork of the
-  # 0.12.0 tag with one addition, withPTY(_:command:), which runs a command
-  # on a PTY (an exec request) rather than the login shell.
+  # 0.12.0 tag with two additions: withPTY(_:command:), which runs a command
+  # on a PTY (an exec request) rather than the login shell, and
+  # connect(to:bootstrap:prehandlers:), which connects over Network.framework.
   Citadel:
     url: https://github.com/brendanwilliam/Citadel.git
-    revision: 5e2d6d4304dcd577ef9b8ba29d06659b30ed86e5
+    revision: 8a5bae0fa5c94745d3115e3c9f2564a0a01b31fc
   # Citadel's own SSH dependency; listed so the app can import NIOSSH.
   swift-nio-ssh:
     url: https://github.com/Joannis/swift-nio-ssh.git
@@ -18,6 +19,11 @@ packages:
   swift-nio:
     url: https://github.com/apple/swift-nio.git
     from: 2.81.0
+  # Network.framework sockets: keepalive, and events when the phone's
+  # network changes.
+  swift-nio-transport-services:
+    url: https://github.com/apple/swift-nio-transport-services.git
+    from: 1.28.0
 targets:
   GhosttyiOS:
     type: application
@@ -68,6 +74,8 @@ targets:
         product: NIOSSH
       - package: swift-nio
         product: NIOCore
+      - package: swift-nio-transport-services
+        product: NIOTransportServices
       - sdk: Metal.framework
       - sdk: QuartzCore.framework
       - sdk: CoreText.framework

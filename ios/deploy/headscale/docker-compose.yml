@@ -1,0 +1,24 @@
+# Headscale, the open-source Tailscale coordination server, with its
+# embedded DERP relay. See README.md for setup.
+services:
+  headscale:
+    # v0.29.5, pinned by digest. To upgrade, change both and see README.md.
+    image: docker.io/headscale/headscale:v0.29.5@sha256:780ed2f9e85719a2211277433f2c8afb45105d0d25031949a6848a485f9e216d
+    restart: unless-stopped
+    container_name: headscale
+    read_only: true
+    tmpfs:
+      - /var/run/headscale
+    ports:
+      # HTTPS for clients and the DERP relay.
+      - "443:8443"
+      # Let's Encrypt HTTP-01 challenges.
+      - "80:8080"
+      # STUN, for NAT traversal.
+      - "3478:3478/udp"
+    volumes:
+      - ./config:/etc/headscale:ro
+      - ./lib:/var/lib/headscale
+    command: serve
+    healthcheck:
+      test: ["CMD", "headscale", "health"]

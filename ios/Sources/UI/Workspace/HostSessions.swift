@@ -24,6 +24,9 @@ final class HostSessions: ObservableObject {
     var onChange: (() -> Void)?
     /// Called after a probe with this device's running sessions.
     var onSessionsFound: (([String]) -> Void)?
+    /// Called when a probe found new ways to reach the host (its tailnet
+    /// address, its local name), to save them with the host.
+    var onRoutesFound: (([HostRoute]) -> Void)?
 
     /// Runs one command on the host over its own connection. Tests set
     /// this to avoid SSH.
@@ -65,13 +68,14 @@ final class HostSessions: ObservableObject {
 
     /// Before a pane's PTY opens: probe the host, end pending sessions,
     /// and return the command that attaches to `session` (nil when zmx
-    /// isn't there, for a plain login shell).
+    /// isn't there or the host doesn't keep sessions, for a plain login
+    /// shell). Runs over a connection whose host key checked out, so the
+    /// routes the host reports are its own.
     func prepare(session: String, run: @escaping Runner) async -> String? {
-        guard host.keepsSessions else { return nil }
         if let output = await withTimeout(Self.probeTimeout, { try await run(ZmxSession.probeCommand) }) {
             update(ZmxSession.parseProbe(String(decoding: output, as: UTF8.self)))
         }
-        guard let zmx = probe?.zmx else { return nil }
+        guard host.keepsSessions, let zmx = probe?.zmx else { return nil }
         await flushKills(run: run, zmx: zmx)
         return ZmxSession.attachCommand(zmx: zmx, name: session)
     }
@@ -89,6 +93,8 @@ final class HostSessions: ObservableObject {
         probe = found
         probed = true
         onChange?()
+        if host.learn(found.routes) { onRoutesFound?(found.routes) }
+        guard host.keepsSessions else { return }
         let mine = ZmxSession.devicePrefix(Self.deviceTag)
         let sessions = found.sessions.filter { $0.hasPrefix(mine) && !pendingKills.contains($0) }
         onSessionsFound?(sessions)

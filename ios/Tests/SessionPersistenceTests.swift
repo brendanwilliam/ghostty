@@ -55,7 +55,11 @@ final class ZmxSessionTests: XCTestCase {
         XCTAssertEqual(ZmxSession.quote("it's"), "'it'\\''s'")
         let attach = ZmxSession.attachCommand(zmx: "/opt/homebrew/bin/zmx", name: "gios-ab12-12345678")
         XCTAssertTrue(attach.hasPrefix("exec \"${SHELL:-/bin/sh}\" -lc '"), attach)
-        XCTAssertTrue(attach.contains("ZMX_NO_DETACH_KEY=1 exec '\\''/opt/homebrew/bin/zmx'\\'' attach '\\''gios-ab12-12345678'\\''"), attach)
+        XCTAssertTrue(attach.contains("export ZMX_NO_DETACH_KEY=1"), attach)
+        // With and without caffeinate, the same quoted attach.
+        let quoted = "'\\''/opt/homebrew/bin/zmx'\\'' attach '\\''gios-ab12-12345678'\\''"
+        XCTAssertTrue(attach.contains("exec caffeinate -i \(quoted)"), attach)
+        XCTAssertTrue(attach.contains("else exec \(quoted); fi"), attach)
         let kill = ZmxSession.killCommand(zmx: "/z", names: ["gios-a", "gios-b"])
         XCTAssertTrue(kill.contains("kill '\\''gios-a'\\'' '\\''gios-b'\\''"), kill)
     }
@@ -175,14 +179,15 @@ final class SessionPersistenceTests: XCTestCase {
         XCTAssertTrue(sessions.missing)
         XCTAssertEqual(sessions.probe?.brew, "/opt/homebrew/bin/brew")
 
-        // Turned off for the host: no probe at all.
+        // Turned off for the host: still probed (to learn the host's
+        // routes), but never attached, and no offer to install zmx.
+        fake.zmx = "/opt/homebrew/bin/zmx"
         var off = host
         off.keepsSessions = false
         let disabled = HostSessions(host: off)
-        let count = fake.commands.count
         let none = await disabled.prepare(session: "gios-test-1", run: fake.runner)
         XCTAssertNil(none)
-        XCTAssertEqual(fake.commands.count, count)
+        XCTAssertFalse(disabled.available)
         XCTAssertFalse(disabled.missing)
     }
 
@@ -346,8 +351,8 @@ final class ZmxIntegrationTests: XCTestCase {
         let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(hex: seedHex))
         let host = Host(name: "test", hostname: "127.0.0.1", port: port, username: user)
         let credentials = SSHCredentials(username: user, deviceKey: key, password: nil)
-        KnownHosts.shared.forget(endpoint: host.endpoint)
-        defer { KnownHosts.shared.forget(endpoint: host.endpoint) }
+        KnownHosts.shared.forget(host: host)
+        defer { KnownHosts.shared.forget(host: host) }
 
         let sessions = HostSessions(host: host)
         let name = ZmxSession.name(for: UUID(), device: "test")

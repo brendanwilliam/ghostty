@@ -51,6 +51,25 @@ final class TerminalPane: ObservableObject, Identifiable {
     /// Why the last connection failed to start, if it did.
     private(set) var lastError: Error?
 
+    /// The route the shown connection went over.
+    @Published private(set) var route: HostRoute?
+    /// Called when the connection's network offers a better path (e.g.
+    /// Wi-Fi is back while on cellular).
+    var onBetterPath: (() -> Void)?
+
+    /// The shown connection's backend.
+    private var backend: (any TerminalBackend)?
+    /// Makes a view and its connection. Tests replace this to avoid SSH.
+    var connectionMaker: ((_ handingOff: Bool) -> (TerminalSurfaceView, BackendLink)?)?
+    /// A connection opened to take over from the shown one (`handOff`).
+    private var handoff: (view: TerminalSurfaceView, task: Task<Error?, Never>)?
+
+    /// How long a connection's path may be unusable before it's given up
+    /// on and attached again.
+    static let unviableGrace: Duration = .seconds(2)
+    /// How long a connection has to answer a liveness check.
+    static let livenessTimeout: Duration = .seconds(3)
+
     init(id: UUID = UUID(), host: Host, sessionName: String? = nil) {
         self.id = id
         self.host = host
@@ -70,9 +89,23 @@ final class TerminalPane: ObservableObject, Identifiable {
     /// Connect, using the device key and (if given or saved) a password.
     /// Returns when the session ends.
     func connect(password: String? = nil) async {
+        guard let (view, link) = connectionMaker?(false) ?? makeConnection(password: password, handingOff: false)
+        else { return }
+        let error = await run(view, link: link)
+        // Key (and any saved password) was refused: offer a password.
+        if let error = error as? SSHSessionError, case .authenticationFailed = error, password == nil {
+            needsPassword = true
+        }
+    }
+
+    /// A new view and its SSH connection, not yet started.
+    ///
+    /// - Parameter handingOff: For `handOff`: attaches only to this pane's
+    ///   zmx session (never a fresh shell) and doesn't refresh the config.
+    private func makeConnection(password: String?, handingOff: Bool) -> (TerminalSurfaceView, BackendLink)? {
         guard let app = GhosttyRuntime.shared.app else {
             title = "Ghostty failed to initialize"
-            return
+            return nil
         }
 
         // Start from the host's config as last fetched so the first frame
@@ -81,36 +114,46 @@ final class TerminalPane: ObservableObject, Identifiable {
         let usesRemote = host.usesRemoteConfig
         let cachedConfig = usesRemote && cache.exists ? cache.configURL : nil
         var beforeShell: (@Sendable (@escaping SSHBackend.Runner) async -> Void)?
-        if usesRemote && syncsRemoteConfig {
+        if usesRemote && syncsRemoteConfig && !handingOff {
             beforeShell = { [weak self] run in
                 await self?.syncRemoteConfig(cache: cache, run: run)
             }
         }
 
+        // The host as the workspace last learned it, with every route.
+        let target = sessions?.host ?? host
         let name = sessionName
         let sessions = sessions
+        let link = BackendLink()
         let backend = SSHBackend(
-            host: host,
-            credentials: .saved(for: host, password: password),
+            host: target,
+            credentials: .saved(for: target, password: password),
             approveUnknownHostKey: { [weak self] fingerprint in
                 await self?.askToTrust(fingerprint: fingerprint) ?? false
             },
             beforeShell: beforeShell,
             command: { [weak self] run in
                 let command = await sessions?.prepare(session: name, run: run)
+                if handingOff {
+                    // Only ever take over the same session.
+                    if command == nil { link.backend?.close() }
+                    return command
+                }
                 await self?.setAttached(command != nil)
                 return command
             },
             sessionLivesOn: { run in
                 await sessions?.isRunning(name, run: run) ?? false
+            },
+            onConnected: { [weak self] route, events in
+                Task { @MainActor in self?.watch(link, route: route, events: events) }
             })
+        link.backend = backend
 
         let view = TerminalSurfaceView(app: app, backend: backend, remoteConfig: cachedConfig)
-        let error = await run(view)
-        // Key (and any saved password) was refused: offer a password.
-        if let error = error as? SSHSessionError, case .authenticationFailed = error, password == nil {
-            needsPassword = true
-        }
+        view.onTitleChange = { [weak self] in self?.title = $0 }
+        configureSurface?(view)
+        return (view, link)
     }
 
     private func setAttached(_ attached: Bool) {
@@ -122,11 +165,14 @@ final class TerminalPane: ObservableObject, Identifiable {
     /// Attaching to a zmx session again keeps the old view on screen
     /// until the new one has output (zmx redraws the screen as it
     /// attaches), so there's no blank flash; if it never gets any, the
-    /// old view stays.
+    /// old view stays. If the session is handed off to a new connection
+    /// meanwhile, this follows it and returns when that one ends.
     @discardableResult
-    func run(_ view: TerminalSurfaceView) async -> Error? {
-        view.onTitleChange = { [weak self] in self?.title = $0 }
-        configureSurface?(view)
+    func run(_ view: TerminalSurfaceView, link: BackendLink? = nil) async -> Error? {
+        if view.onTitleChange == nil {
+            view.onTitleChange = { [weak self] in self?.title = $0 }
+            configureSurface?(view)
+        }
         ended = false
         lastError = nil
 
@@ -135,23 +181,32 @@ final class TerminalPane: ObservableObject, Identifiable {
             view.layoutIfNeeded()
             view.onFirstOutput = { [weak self, weak view] in
                 guard let self, let view else { return }
-                self.show(view, replacing: old)
+                self.show(view, replacing: old, link: link)
             }
         } else {
-            show(view, replacing: nil)
+            show(view, replacing: nil, link: link)
         }
 
-        let error = await view.run()
+        var error = await view.run()
+        // Handed off while this connection ran: carry on with the new one.
+        while let next = handoff {
+            handoff = nil
+            let nextError = await next.task.value
+            guard surfaceView === next.view else { break }
+            error = nextError
+        }
         lastError = error
         ended = true
         reconnecting = reconnecting && canReattach
         return error
     }
 
-    private func show(_ view: TerminalSurfaceView, replacing old: TerminalSurfaceView?) {
+    private func show(_ view: TerminalSurfaceView, replacing old: TerminalSurfaceView?, link: BackendLink?) {
         if old?.isFirstResponder == true { onKeyboardHandoff?() }
         attempt += 1
         surfaceView = view
+        backend = link?.backend
+        route = link?.route
         reconnecting = false
     }
 
@@ -159,6 +214,79 @@ final class TerminalPane: ObservableObject, Identifiable {
     /// on the host if it's in zmx.
     func suspend() {
         surfaceView?.closeBackend()
+    }
+
+    /// Whether this pane has a live connection to check or move.
+    var isConnected: Bool { !ended && backend != nil && surfaceView != nil }
+
+    /// Whether the connection still carries traffic.
+    func checkAlive() async -> Bool {
+        guard let backend = backend as? LivenessChecking else { return false }
+        return await backend.isAlive(within: Self.livenessTimeout)
+    }
+
+    /// Give up on the connection (its network is gone) so the pane
+    /// attaches again over whatever works now.
+    func dropConnection() {
+        guard attachedToSession, isConnected else { return }
+        suspend()
+    }
+
+    /// Move to a new connection without a gap: open one alongside the
+    /// current connection (over the best route now), and once it has
+    /// attached and zmx has redrawn the screen, show it and close the old
+    /// one. Until then, keys go to the old connection, so none are lost
+    /// or sent twice; if the new one fails, the old one carries on.
+    func handOff() {
+        guard attachedToSession, isConnected, handoff == nil, let old = surfaceView,
+              let (view, link) = connectionMaker?(true) ?? makeConnection(password: nil, handingOff: true)
+        else { return }
+        view.frame = old.bounds
+        view.layoutIfNeeded()
+        view.onFirstOutput = { [weak self, weak view] in
+            guard let self, let view, self.surfaceView === old else { return }
+            self.show(view, replacing: old, link: link)
+            // Let keys typed just before the swap reach the host first.
+            Task {
+                try? await Task.sleep(for: .milliseconds(300))
+                old.closeBackend()
+            }
+        }
+        let task = Task { await view.run() }
+        handoff = (view, task)
+        Task { [weak self] in
+            _ = await task.value
+            // Ended without taking over: forget it.
+            if let self, self.handoff?.view === view { self.handoff = nil }
+        }
+    }
+
+    var isHandingOff: Bool { handoff != nil }
+
+    /// Follow a connection's route and network events.
+    private func watch(_ link: BackendLink, route: HostRoute, events: AsyncStream<RouteEvent>) {
+        link.route = route
+        if link.backend != nil && link.backend === backend { self.route = route }
+        Task { [weak self] in
+            var giveUp: Task<Void, Never>?
+            for await event in events {
+                guard let self, link.backend === self.backend else { continue }
+                switch event {
+                case .viable(false):
+                    giveUp?.cancel()
+                    giveUp = Task { [weak self] in
+                        try? await Task.sleep(for: Self.unviableGrace)
+                        guard !Task.isCancelled, let self, link.backend === self.backend else { return }
+                        self.dropConnection()
+                    }
+                case .viable(true):
+                    giveUp?.cancel()
+                case .betterPathAvailable:
+                    self.onBetterPath?()
+                }
+            }
+            giveUp?.cancel()
+        }
     }
 
     func disconnect() {
@@ -189,3 +317,22 @@ final class TerminalPane: ObservableObject, Identifiable {
         }
     }
 }
+
+/// Ties a view's backend to what's known about its connection, so events
+/// from a connection that's no longer shown are ignored.
+final class BackendLink: @unchecked Sendable {
+    weak var backend: (any TerminalBackend)?
+    var route: HostRoute?
+
+    init(backend: (any TerminalBackend)? = nil, route: HostRoute? = nil) {
+        self.backend = backend
+        self.route = route
+    }
+}
+
+/// A backend that can tell whether its connection still works.
+protocol LivenessChecking {
+    func isAlive(within timeout: Duration) async -> Bool
+}
+
+extension SSHBackend: LivenessChecking {}

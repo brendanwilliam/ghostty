@@ -11,8 +11,10 @@ struct TerminalScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            TunnelBanner(workspace: workspace)
             if let sessions = workspace.sessions {
                 ZmxBanner(sessions: sessions)
+                SleepBanner(sessions: sessions)
             }
             if workspace.tabs.count > 1 {
                 TabStrip(workspace: workspace)
@@ -51,6 +53,9 @@ struct TerminalScreen: View {
             workspace.onColumnsSettled = { [store] columns in
                 store.setColumns(columns, for: hostID)
             }
+            workspace.sessions?.onRoutesFound = { [store] routes in
+                store.learnRoutes(routes, for: hostID)
+            }
             workspace.start()
         }
         .onChange(of: workspace.closed) { _, closed in
@@ -73,7 +78,7 @@ struct TerminalScreen: View {
             }
         } message: { prompt in
             Text("""
-            First connection to \(workspace.host.endpoint). Verify the fingerprint matches \
+            First connection to \(workspace.host.displayName). Verify the fingerprint matches \
             the server before trusting it.
 
             On the Mac: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub

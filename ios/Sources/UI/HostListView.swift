@@ -121,7 +121,17 @@ private struct OpenSessionsLabel: View {
     @ObservedObject var workspace: TerminalWorkspace
 
     var body: some View {
-        TabCountLabel(tabs: workspace.tabs.count)
+        HStack(spacing: 6) {
+            TabCountLabel(tabs: workspace.tabs.count)
+            if let route = workspace.focusedPane?.route {
+                Label(route.kind == .tailnet ? "tailnet" : route.kind == .lan ? "local network" : route.address,
+                      systemImage: route.kind == .lan ? "house" : "network")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .labelStyle(.titleAndIcon)
+                    .imageScale(.small)
+            }
+        }
     }
 }
 

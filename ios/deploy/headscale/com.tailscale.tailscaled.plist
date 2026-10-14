@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Runs Homebrew's open-source tailscaled at boot, without uploading logs
+  to Tailscale. Install with (see README.md):
+    sudo cp com.tailscale.tailscaled.plist /Library/LaunchDaemons/
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.tailscale.tailscaled.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tailscale.tailscaled</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/opt/tailscale/bin/tailscaled</string>
+        <string>--no-logs-no-support</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/tailscaled.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/tailscaled.log</string>
+</dict>
+</plist>

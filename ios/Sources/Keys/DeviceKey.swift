@@ -32,6 +32,33 @@ enum DeviceKey {
         return "ssh-ed25519 \(blob.base64EncodedString()) \(comment)"
     }
 
+    /// One shell command, to paste into Terminal on the Mac, that
+    /// authorizes this key: it creates `~/.ssh` with the right permissions
+    /// if needed, appends the key unless it's already there (so running it
+    /// twice is harmless), and prints a checkmark if all of that worked.
+    static func authorizeCommand(for key: Curve25519.Signing.PrivateKey, comment: String) -> String {
+        let line = authorizedKeysLine(for: key, comment: comment)
+        let file = "~/.ssh/authorized_keys"
+        // The leading newline keeps the key off the end of a last line that
+        // has none; a blank line in the file is harmless.
+        return "k=\(ZmxSession.quote(line)); mkdir -p -m 700 ~/.ssh && "
+            + "{ grep -qsF \"$k\" \(file) || printf '\\n%s\\n' \"$k\" >> \(file); } && "
+            + "chmod 600 \(file) && echo '✓ Connected'"
+    }
+
+    /// An `authorized_keys` line with most of the key hidden, safe to show
+    /// on a screen others might see: the type, the last few characters (to
+    /// recognize it), and the comment. (Every Ed25519 key starts with the
+    /// same characters, so showing the start would reveal nothing.)
+    static func masked(_ line: String, visible: Int = 6) -> String {
+        let parts = line.split(separator: " ", maxSplits: 2).map(String.init)
+        guard parts.count >= 2 else { return String(repeating: "•", count: 16) }
+        let blob = parts[1]
+        let hidden = String(repeating: "•", count: 16)
+        let shown = blob.count > visible * 2 ? hidden + blob.suffix(visible) : hidden
+        return ([parts[0], shown] + parts.dropFirst(2)).joined(separator: " ")
+    }
+
     /// SHA256 fingerprint in OpenSSH's format, for display.
     static func fingerprint(for key: Curve25519.Signing.PrivateKey) -> String {
         OpenSSH.fingerprint(blob: OpenSSH.publicKeyBlob(ed25519: key.publicKey.rawRepresentation))

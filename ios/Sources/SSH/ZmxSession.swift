@@ -39,16 +39,44 @@ enum ZmxSession {
         var brew: String?
         /// This app's sessions running on the host.
         var sessions: [String] = []
+        /// The host's tailnet (Tailscale/Headscale) IPv4 address, if it's
+        /// on one.
+        var tailnetIP: String?
+        /// The host's name on the local network (`name.local`), on macOS.
+        var localName: String?
+        /// Minutes of idle before the host sleeps on its current power
+        /// source; 0 never sleeps. Nil if unknown (not macOS).
+        var sleepMinutes: Int?
+
+        /// Other ways to reach the host that it reported.
+        var routes: [HostRoute] {
+            var routes: [HostRoute] = []
+            if let tailnetIP { routes.append(HostRoute(address: tailnetIP, kind: .tailnet)) }
+            if let localName { routes.append(HostRoute(address: localName, kind: .lan)) }
+            return routes
+        }
+
+        /// The host sleeps when idle, which pauses sessions and makes it
+        /// unreachable.
+        var sleeps: Bool { (sleepMinutes ?? 0) > 0 }
     }
 
-    /// Prints zmx's and Homebrew's paths and, if zmx is there, the app's
-    /// sessions, one per line: `zmx <path>`, `brew <path>`, `session <name>`.
+    /// Prints what the host has, one fact per line:
+    /// - `zmx <path>`, `brew <path>`, and the app's sessions, `session <name>`;
+    /// - `tailnet <ip>`: its tailnet address, from the Tailscale CLI
+    ///   (Homebrew's, or the Mac app's);
+    /// - `local <name>.local` and `sleep <minutes>`, on macOS.
     static var probeCommand: String {
         loginShell("""
             z=$(command -v zmx); b=$(command -v brew)
             [ -n "$z" ] && echo "zmx $z"
             [ -n "$b" ] && echo "brew $b"
             [ -n "$z" ] && "$z" list --short 2>/dev/null | grep '^\(namePrefix)' | sed 's/^/session /'
+            t=$(command -v tailscale)
+            [ -z "$t" ] && [ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ] && t=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+            [ -n "$t" ] && "$t" ip -4 2>/dev/null | head -n 1 | sed 's/^/tailnet /'
+            command -v scutil >/dev/null && echo "local $(scutil --get LocalHostName 2>/dev/null).local"
+            command -v pmset >/dev/null && pmset -g 2>/dev/null | awk '$1 == "sleep" { print "sleep " $2 }'
             true
             """)
     }
@@ -58,10 +86,14 @@ enum ZmxSession {
         for line in output.split(whereSeparator: \.isNewline) {
             let parts = line.split(separator: " ", maxSplits: 1).map(String.init)
             guard parts.count == 2 else { continue }
+            let value = parts[1].trimmingCharacters(in: .whitespaces)
             switch parts[0] {
-            case "zmx": probe.zmx = parts[1]
-            case "brew": probe.brew = parts[1]
-            case "session" where parts[1].hasPrefix(namePrefix): probe.sessions.append(parts[1])
+            case "zmx": probe.zmx = value
+            case "brew": probe.brew = value
+            case "session" where value.hasPrefix(namePrefix): probe.sessions.append(value)
+            case "tailnet" where HostRoute.kind(of: value) == .tailnet: probe.tailnetIP = value
+            case "local" where value.count > ".local".count: probe.localName = value
+            case "sleep": probe.sleepMinutes = Int(value)
             default: break
             }
         }
@@ -69,9 +101,14 @@ enum ZmxSession {
     }
 
     /// Attach to (creating if needed) `name`, as the PTY's command.
-    /// Ctrl+\ is passed to programs rather than detaching.
+    /// Ctrl+\ is passed to programs rather than detaching. On macOS,
+    /// `caffeinate` keeps the host awake while attached.
     static func attachCommand(zmx: String, name: String) -> String {
-        loginShell("ZMX_NO_DETACH_KEY=1 exec \(quote(zmx)) attach \(quote(name))")
+        let attach = "\(quote(zmx)) attach \(quote(name))"
+        return loginShell("""
+            export ZMX_NO_DETACH_KEY=1
+            if command -v caffeinate >/dev/null; then exec caffeinate -i \(attach); else exec \(attach); fi
+            """)
     }
 
     /// Prints the app's running sessions, one name per line.
