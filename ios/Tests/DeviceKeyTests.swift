@@ -10,10 +10,13 @@ final class DeviceKeyTests: XCTestCase {
         let command = DeviceKey.authorizeCommand(for: key, comment: "ghostty-ios@Brendans-iPhone")
 
         XCTAssertFalse(command.contains("\n"), "one command to paste")
+        XCTAssertEqual(command.components(separatedBy: line).count - 1, 1, "the key appears once")
         XCTAssertTrue(command.contains("'\(line)'"), "the key line, single-quoted")
-        XCTAssertTrue(command.contains("chmod 700 ~/.ssh"))
+        XCTAssertTrue(command.contains("mkdir -p -m 700 ~/.ssh"))
         XCTAssertTrue(command.contains("chmod 600 ~/.ssh/authorized_keys"))
-        XCTAssertTrue(command.contains("grep -qF"), "doesn't add the key twice")
+        XCTAssertTrue(command.contains("grep -qsF"), "doesn't add the key twice")
+        XCTAssertTrue(command.hasSuffix("echo '✓ Connected'"), "says so when it worked")
+        XCTAssertLessThan(command.count, line.count + 190, "short enough to read")
         XCTAssertFalse(command.contains("pbpaste"), "nothing to copy first")
     }
 

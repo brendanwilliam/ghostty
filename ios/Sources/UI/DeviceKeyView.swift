@@ -19,14 +19,20 @@ struct DeviceKeyView: View {
         key.map { DeviceKey.authorizeCommand(for: $0, comment: DeviceKey.defaultComment) }
     }
 
+    /// The command with the key hidden, until the user taps to reveal it.
+    private var maskedCommand: String? {
+        guard let command, let publicKeyLine else { return nil }
+        return command.replacingOccurrences(of: publicKeyLine, with: DeviceKey.masked(publicKeyLine))
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                if let command, let publicKeyLine, let key {
+                if let command, let maskedCommand, let publicKeyLine, let key {
                     Section {
                         Text("1. On the Mac, open System Settings → General → Sharing and turn on Remote Login.")
                         Text("2. Copy this command, then paste it into Terminal on the Mac and press Return. (Universal Clipboard or AirDrop can carry it across.)")
-                        CodeBlock(text: command)
+                        CodeBlock(text: command, masked: maskedCommand)
                             .id(command) // a new key is a new command
                         Button("Show full command") { showingCommand = true }
                     } header: {
@@ -34,7 +40,7 @@ struct DeviceKeyView: View {
                     }
 
                     Section {
-                        CodeBlock(text: publicKeyLine, display: DeviceKey.masked(publicKeyLine), wraps: true)
+                        CodeBlock(text: publicKeyLine, masked: DeviceKey.masked(publicKeyLine), wraps: true)
                             .id(publicKeyLine)
                         Button("Regenerate Key", role: .destructive) {
                             confirmingRegenerate = true
@@ -70,8 +76,8 @@ struct DeviceKeyView: View {
                 Text("Servers that trust the current key will stop accepting this device until you add the new key.")
             }
             .sheet(isPresented: $showingCommand) {
-                if let command {
-                    CommandSheet(command: command)
+                if let command, let maskedCommand {
+                    CommandSheet(command: command, masked: maskedCommand)
                 }
             }
             .onAppear { load { try DeviceKey.loadOrCreate() } }
@@ -91,15 +97,16 @@ struct DeviceKeyView: View {
 /// The command in full, so it can be read before it's pasted anywhere.
 private struct CommandSheet: View {
     let command: String
+    let masked: String
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    CodeBlock(text: command, wraps: true)
+                    CodeBlock(text: command, masked: masked, wraps: true)
                 } footer: {
-                    Text("Run on the Mac, it creates ~/.ssh and authorized_keys if needed, adds this device's public key unless it's already there, and says what it did. It contains no private key.")
+                    Text("Run on the Mac, it creates ~/.ssh and authorized_keys if needed, adds this device's public key unless it's already there, and prints a checkmark when it worked. It contains no private key. Tap the eye to see the key.")
                 }
             }
             .navigationTitle("Command")

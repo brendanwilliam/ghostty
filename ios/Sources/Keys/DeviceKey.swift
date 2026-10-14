@@ -33,17 +33,17 @@ enum DeviceKey {
     }
 
     /// One shell command, to paste into Terminal on the Mac, that
-    /// authorizes this key: it creates `~/.ssh` and `authorized_keys` with
-    /// the right permissions if needed, adds the key unless it's already
-    /// there (so running it twice is harmless), and says what it did.
+    /// authorizes this key: it creates `~/.ssh` with the right permissions
+    /// if needed, appends the key unless it's already there (so running it
+    /// twice is harmless), and prints a checkmark if all of that worked.
     static func authorizeCommand(for key: Curve25519.Signing.PrivateKey, comment: String) -> String {
         let line = authorizedKeysLine(for: key, comment: comment)
-        let blob = OpenSSH.publicKeyBlob(ed25519: key.publicKey.rawRepresentation).base64EncodedString()
         let file = "~/.ssh/authorized_keys"
-        return "mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch \(file) && chmod 600 \(file) && "
-            + "if grep -qF \(ZmxSession.quote(blob)) \(file); then echo 'This key is already authorized.'; "
-            + "else { [ -z \"$(tail -c1 \(file))\" ] || echo; } >> \(file) && "
-            + "printf '%s\\n' \(ZmxSession.quote(line)) >> \(file) && echo 'Key added. You can connect now.'; fi"
+        // The leading newline keeps the key off the end of a last line that
+        // has none; a blank line in the file is harmless.
+        return "k=\(ZmxSession.quote(line)); mkdir -p -m 700 ~/.ssh && "
+            + "{ grep -qsF \"$k\" \(file) || printf '\\n%s\\n' \"$k\" >> \(file); } && "
+            + "chmod 600 \(file) && echo '✓ Connected'"
     }
 
     /// An `authorized_keys` line with most of the key hidden, safe to show

@@ -8,8 +8,10 @@ import SwiftUI
 struct CodeBlock: View {
     /// What gets copied.
     let text: String
-    /// What's shown instead of `text`, e.g. a partly hidden key.
-    var display: String?
+    /// What's shown until the user taps to reveal `text`, e.g. a partly
+    /// hidden key, so the screen is safe to screenshot. Copying always
+    /// copies `text`, revealed or not.
+    var masked: String?
     /// Wrap long text. Otherwise it stays on one line and scrolls sideways,
     /// as long commands do on GitHub.
     var wraps = false
@@ -17,6 +19,7 @@ struct CodeBlock: View {
     /// How long the icon says "copied".
     static let confirmation: Duration = .seconds(2)
 
+    @State private var revealed = false
     @State private var copied = false
     /// Counts copies, so tapping again restarts the two seconds.
     @State private var copies = 0
@@ -24,7 +27,10 @@ struct CodeBlock: View {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             code
-            copyButton
+            HStack(spacing: 0) {
+                if masked != nil { revealButton }
+                copyButton
+            }
         }
         .padding(.leading, 12)
         .padding(.trailing, 4)
@@ -33,6 +39,10 @@ struct CodeBlock: View {
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(.separator)))
         // In a List row, keep the row itself from being tappable.
         .buttonStyle(.borderless)
+        .onTapGesture {
+            guard masked != nil else { return }
+            withAnimation(.easeInOut(duration: 0.15)) { revealed.toggle() }
+        }
         .sensoryFeedback(.success, trigger: copies)
         .task(id: copies) {
             guard copies > 0 else { return }
@@ -43,7 +53,7 @@ struct CodeBlock: View {
 
     @ViewBuilder
     private var code: some View {
-        let shown = Text(display ?? text)
+        let shown = Text(revealed ? text : masked ?? text)
             .font(.callout.monospaced())
             .padding(.vertical, 8)
         if wraps {
@@ -54,6 +64,18 @@ struct CodeBlock: View {
                 shown.lineLimit(1).fixedSize()
             }
         }
+    }
+
+    private var revealButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { revealed.toggle() }
+        } label: {
+            Image(systemName: revealed ? "eye.slash" : "eye")
+                .foregroundStyle(Color.secondary)
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(revealed ? "Hide" : "Reveal")
     }
 
     private var copyButton: some View {

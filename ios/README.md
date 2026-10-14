@@ -163,9 +163,11 @@ so the project pins a fork of Citadel 0.12.0 with `withPTY(_:command:)`.
    app that you're meant to copy looks and works the same way. Paste it into
    Terminal on the Mac, e.g. with Universal Clipboard, and press Return. It
    adds this device's public key to `~/.ssh/authorized_keys` (creating the
-   folder and file with the right permissions if needed) and says "Key
-   added", or that it already was. The **SSH key** section shows the key with
-   most of it hidden, and can copy it or generate a new one.
+   folder and file with the right permissions if needed, and skipping the key
+   if it's already there) and prints "✓ Connected". The key is hidden on the
+   screen until you tap the eye icon, so screenshots are safe; copying works
+   either way. The **SSH key** section shows the same for the key itself, and
+   can generate a new one.
 3. Add the Mac. It shows up under **On this network** through Bonjour, or you
    can enter its hostname (`Your-Mac.local`) and your username.
 4. On the first connection, compare the host key fingerprint with the output
