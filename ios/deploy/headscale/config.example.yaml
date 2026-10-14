@@ -1,0 +1,98 @@
+# Headscale config for reaching a Mac from Ghostty on iOS. Copy to
+# config/config.yaml and replace the three placeholders:
+#
+#   hs.example.com   the server's DNS name (an A record to the server)
+#   tail.example.com MagicDNS suffix for devices; must differ from the above
+#   203.0.113.10     the server's public IPv4 address
+#
+# Based on Headscale v0.29.5's config-example.yaml; anything not set here
+# uses Headscale's defaults.
+
+server_url: https://hs.example.com
+# Inside the container; docker-compose.yml publishes it on 443.
+listen_addr: 0.0.0.0:8443
+metrics_listen_addr: 127.0.0.1:9090
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: false
+
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+
+derp:
+  server:
+    # The relay for when the phone and Mac can't connect directly (e.g.
+    # behind CGNAT). Traffic through it stays end-to-end encrypted.
+    enabled: true
+    region_id: 999
+    region_code: "headscale"
+    region_name: "Headscale Embedded DERP"
+    # Only devices in this tailnet may use the relay.
+    verify_clients: true
+    stun_listen_addr: "0.0.0.0:3478"
+    private_key_path: /var/lib/headscale/derp_server_private.key
+    automatically_add_embedded_derp_region: true
+    ipv4: 203.0.113.10
+  # Only this server's relay, so no connection metadata reaches Tailscale's
+  # relays. It's then the only relay: if it's down, devices that can't
+  # connect directly can't connect. For Tailscale's relays as a backup,
+  # use this instead:
+  #   urls:
+  #     - https://controlplane.tailscale.com/derpmap/default
+  urls: []
+  paths: []
+  auto_update_enabled: false
+  update_frequency: 3h
+
+disable_check_updates: false
+
+node:
+  # Node keys don't expire, so the Mac doesn't silently drop off.
+  expiry: 0
+
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+    write_ahead_log: true
+    wal_autocheckpoint: 1000
+
+acme_url: https://acme-v02.api.letsencrypt.org/directory
+acme_email: ""
+tls_letsencrypt_hostname: hs.example.com
+tls_letsencrypt_cache_dir: /var/lib/headscale/cache
+tls_letsencrypt_challenge_type: HTTP-01
+# Inside the container; docker-compose.yml publishes it on 80.
+tls_letsencrypt_listen: ":8080"
+
+log:
+  level: info
+  format: text
+
+policy:
+  mode: file
+  path: /etc/headscale/policy.hujson
+
+dns:
+  magic_dns: true
+  base_domain: tail.example.com
+  # Leave the phone's own DNS alone; only tailnet names go to MagicDNS.
+  override_local_dns: false
+  nameservers:
+    global: []
+    split: {}
+  search_domains: []
+  extra_records: []
+
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"
+
+logtail:
+  enabled: false
+
+taildrop:
+  enabled: false

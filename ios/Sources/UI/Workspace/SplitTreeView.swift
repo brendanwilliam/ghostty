@@ -61,7 +61,7 @@ private struct PaneView: View {
         }
         .overlay(alignment: .top) {
             if pane.reconnecting {
-                Label("Reconnecting…", systemImage: "arrow.triangle.2.circlepath")
+                Label(workspace.reconnectingLabel, systemImage: "arrow.triangle.2.circlepath")
                     .font(.caption)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)

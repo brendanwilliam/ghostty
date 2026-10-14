@@ -1,7 +1,12 @@
 import Foundation
 
-/// Trust-on-first-use storage for server host keys, keyed by
-/// `host:port`. Keys are stored in OpenSSH public key format.
+/// Trust-on-first-use storage for server host keys. Keys are stored in
+/// OpenSSH public key format.
+///
+/// A saved host's key is pinned to the host (`host:<id>`), not to an
+/// address, so every route to it (local network, tailnet) must present
+/// that same key. Earlier versions keyed by `hostname:port`; such an entry
+/// moves to the host the first time it's checked.
 final class KnownHosts: @unchecked Sendable {
     enum Verdict: Equatable {
         /// The key matches the one previously trusted for this host.
@@ -34,6 +39,46 @@ final class KnownHosts: @unchecked Sendable {
     static var defaultURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return dir.appendingPathComponent("known_hosts.json")
+    }
+
+    /// The entry for a saved host, whichever route it's reached by.
+    static func entry(for host: Host) -> String { "host:\(host.id.uuidString)" }
+
+    func check(host: Host, key: String) -> Verdict {
+        migrate(host)
+        return check(endpoint: Self.entry(for: host), key: key)
+    }
+
+    func trust(host: Host, key: String) {
+        trust(endpoint: Self.entry(for: host), key: key)
+    }
+
+    /// Forget a host's key, including any entry from before keys were
+    /// pinned per host.
+    func forget(host: Host) {
+        lock.withLock {
+            _ = entries.removeValue(forKey: Self.entry(for: host))
+            _ = entries.removeValue(forKey: host.endpoint)
+        }
+        save()
+    }
+
+    func fingerprint(host: Host) -> String? {
+        migrate(host)
+        return fingerprint(endpoint: Self.entry(for: host))
+    }
+
+    /// Move a key stored under the host's entered address (by earlier
+    /// versions) to the host itself.
+    private func migrate(_ host: Host) {
+        let moved: Bool = lock.withLock {
+            let entry = Self.entry(for: host)
+            guard entries[entry] == nil, let legacy = entries.removeValue(forKey: host.endpoint)
+            else { return false }
+            entries[entry] = legacy
+            return true
+        }
+        if moved { save() }
     }
 
     func check(endpoint: String, key: String) -> Verdict {

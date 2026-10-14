@@ -374,8 +374,8 @@ final class SSHIntegrationTests: XCTestCase {
 
         let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(hex: seedHex))
         let host = Host(name: "test", hostname: "127.0.0.1", port: port, username: user)
-        KnownHosts.shared.forget(endpoint: host.endpoint)
-        defer { KnownHosts.shared.forget(endpoint: host.endpoint) }
+        KnownHosts.shared.forget(host: host)
+        defer { KnownHosts.shared.forget(host: host) }
 
         let approvals = Counter()
         let backend = SSHBackend(
@@ -412,7 +412,7 @@ final class SSHIntegrationTests: XCTestCase {
         XCTAssertEqual(approvals.value, 1)
 
         // The key was remembered, so reconnecting doesn't prompt.
-        XCTAssertNotNil(KnownHosts.shared.fingerprint(endpoint: host.endpoint))
+        XCTAssertNotNil(KnownHosts.shared.fingerprint(host: host))
     }
 
     /// Fetches the host's Ghostty config before the shell opens. Expects
@@ -430,8 +430,8 @@ final class SSHIntegrationTests: XCTestCase {
 
         let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(hex: seedHex))
         let host = Host(name: "test", hostname: "127.0.0.1", port: port, username: user)
-        KnownHosts.shared.forget(endpoint: host.endpoint)
-        defer { KnownHosts.shared.forget(endpoint: host.endpoint) }
+        KnownHosts.shared.forget(host: host)
+        defer { KnownHosts.shared.forget(host: host) }
 
         let cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: cacheDir) }
@@ -481,8 +481,8 @@ final class SSHIntegrationTests: XCTestCase {
 
         let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(hex: seedHex))
         let host = Host(name: "test", hostname: "127.0.0.1", port: port, username: user)
-        KnownHosts.shared.forget(endpoint: host.endpoint)
-        defer { KnownHosts.shared.forget(endpoint: host.endpoint) }
+        KnownHosts.shared.forget(host: host)
+        defer { KnownHosts.shared.forget(host: host) }
 
         let backend = SSHBackend(
             host: host,
@@ -495,7 +495,7 @@ final class SSHIntegrationTests: XCTestCase {
         } catch let error as SSHSessionError {
             guard case .hostKeyRejected = error else { return XCTFail("unexpected error \(error)") }
         }
-        XCTAssertNil(KnownHosts.shared.fingerprint(endpoint: host.endpoint))
+        XCTAssertNil(KnownHosts.shared.fingerprint(host: host))
     }
 }
 

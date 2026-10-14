@@ -52,12 +52,14 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
     private let beforeShell: (@Sendable (@escaping Runner) async -> Void)?
     private let command: (@Sendable (@escaping Runner) async -> String?)?
     private let sessionLivesOn: (@Sendable (@escaping Runner) async -> Bool)?
+    private let onConnected: (@Sendable (HostRoute, AsyncStream<RouteEvent>) -> Void)?
 
     /// How long `beforeShell` may take before the shell opens anyway.
     static let beforeShellTimeout: Duration = .seconds(8)
 
     private let lock = NSLock()
     private var client: SSHClient?
+    private var route: HostRoute?
     private var closed = false
 
     /// - Parameter approveUnknownHostKey: Called with the server's key
@@ -72,13 +74,16 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
     ///   while still connected: whether what it attached to is still
     ///   running on the host (it was detached, not exited). If so, the
     ///   session is reported dropped, to be attached again.
+    /// - Parameter onConnected: Told which route the connection went
+    ///   over, with that route's network events.
     init(
         host: Host,
         credentials: SSHCredentials,
         approveUnknownHostKey: @escaping @Sendable (String) async -> Bool,
         beforeShell: (@Sendable (@escaping Runner) async -> Void)? = nil,
         command: (@Sendable (@escaping Runner) async -> String?)? = nil,
-        sessionLivesOn: (@Sendable (@escaping Runner) async -> Bool)? = nil
+        sessionLivesOn: (@Sendable (@escaping Runner) async -> Bool)? = nil,
+        onConnected: (@Sendable (HostRoute, AsyncStream<RouteEvent>) -> Void)? = nil
     ) {
         self.host = host
         self.credentials = credentials
@@ -86,29 +91,60 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
         self.beforeShell = beforeShell
         self.command = command
         self.sessionLivesOn = sessionLivesOn
+        self.onConnected = onConnected
         (events, eventContinuation) = AsyncStream.makeStream()
         (input, inputContinuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
         (resizes, resizeContinuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
     }
 
-    /// Connect and authenticate, checking the host key against
-    /// `KnownHosts`.
+    /// An authenticated connection to a host.
+    struct Connection: @unchecked Sendable {
+        let client: SSHClient
+        /// The route it went over.
+        let route: HostRoute
+        /// That route's network events; ends when the connection closes.
+        let events: AsyncStream<RouteEvent>
+    }
+
+    /// Connect over the best of the host's routes and authenticate,
+    /// checking the host key against `KnownHosts`. Every route must
+    /// present the key trusted for the host.
     static func connect(
         host: Host,
         credentials: SSHCredentials,
         approveUnknownHostKey: @escaping @Sendable (String) async -> Bool
-    ) async throws -> SSHClient {
-        let validator = TOFUHostKeyValidator(
-            endpoint: host.endpoint,
-            approve: approveUnknownHostKey)
+    ) async throws -> Connection {
+        let network = NetworkMonitor.shared.current
+        let routes = RouteDialer.order(
+            host.routes, tunnelUp: network.tunnel,
+            preferred: RouteMemory.shared.route(for: host.id, on: network.identity))
+        // Until its key is trusted, try routes one at a time so the user
+        // is asked about the key once.
+        let trusted = KnownHosts.shared.fingerprint(host: host) != nil
+        let (route, connection) = try await RouteDialer.race(
+            routes, staggered: trusted,
+            dial: { route in
+                try await connect(route: route, host: host, credentials: credentials,
+                                  approveUnknownHostKey: approveUnknownHostKey)
+            },
+            discard: { connection in try? await connection.client.close() })
+        RouteMemory.shared.remember(route, for: host.id, on: network.identity)
+        return connection
+    }
+
+    private static func connect(
+        route: HostRoute,
+        host: Host,
+        credentials: SSHCredentials,
+        approveUnknownHostKey: @escaping @Sendable (String) async -> Bool
+    ) async throws -> Connection {
+        let validator = TOFUHostKeyValidator(host: host, approve: approveUnknownHostKey)
         do {
-            return try await SSHClient.connect(
-                host: host.hostname,
-                port: host.port,
-                authenticationMethod: .custom(KeyThenPasswordAuth(credentials: credentials)),
-                hostKeyValidator: .custom(validator),
-                reconnect: .never,
-                connectTimeout: .seconds(15))
+            let (client, events) = try await Transport.connect(
+                route: route,
+                authentication: { .custom(KeyThenPasswordAuth(credentials: credentials)) },
+                hostKeyValidator: .custom(validator))
+            return Connection(client: client, route: route, events: events)
         } catch {
             if let hostKeyError = validator.failure { throw hostKeyError }
             if case SSHClientError.allAuthenticationOptionsFailed = error {
@@ -124,7 +160,7 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
     /// Run one command on the host over a connection of its own, and
     /// return its output. Never prompts: an untrusted host key fails.
     static func run(_ command: String, on host: Host, credentials: SSHCredentials) async throws -> Data {
-        let client = try await connect(host: host, credentials: credentials) { _ in false }
+        let client = try await connect(host: host, credentials: credentials) { _ in false }.client
         defer { Task { try? await client.close() } }
         return try await runner(client)(command)
     }
@@ -139,13 +175,16 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
     func start(size: TerminalSize) async throws {
         defer { eventContinuation.finish() }
 
-        let client = try await Self.connect(
+        let connection = try await Self.connect(
             host: host, credentials: credentials, approveUnknownHostKey: approveUnknownHostKey)
+        let client = connection.client
 
         let shouldClose: Bool = lock.withLock {
             self.client = client
+            self.route = connection.route
             return closed
         }
+        onConnected?(connection.route, connection.events)
         if shouldClose {
             try? await client.close()
             eventContinuation.yield(.exited(code: nil, message: nil))
@@ -245,6 +284,19 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
 
     private var isClosed: Bool { lock.withLock { closed } }
 
+    /// The route the connection went over, once connected.
+    var currentRoute: HostRoute? { lock.withLock { route } }
+
+    /// Whether the connection still carries traffic: a trivial command
+    /// gets an answer within `timeout`. False before connecting.
+    func isAlive(within timeout: Duration) async -> Bool {
+        guard let client = lock.withLock({ self.client }) else { return false }
+        let box = ClientBox(client: client)
+        return await withTimeout(timeout) {
+            _ = try await box.client.executeCommand("true")
+        } != nil
+    }
+
     func write(_ data: Data) {
         inputContinuation.yield(data)
     }
@@ -263,6 +315,26 @@ final class SSHBackend: TerminalBackend, @unchecked Sendable {
         if let client {
             Task { try? await client.close() }
         }
+    }
+}
+
+private struct ClientBox: @unchecked Sendable {
+    let client: SSHClient
+}
+
+/// The route that last worked for each host on each network, tried first
+/// next time.
+final class RouteMemory: @unchecked Sendable {
+    static let shared = RouteMemory()
+    private let lock = NSLock()
+    private var routes: [String: HostRoute] = [:]
+
+    func route(for host: UUID, on network: String) -> HostRoute? {
+        lock.withLock { routes["\(host)|\(network)"] }
+    }
+
+    func remember(_ route: HostRoute, for host: UUID, on network: String) {
+        lock.withLock { routes["\(host)|\(network)"] = route }
     }
 }
 
@@ -325,30 +397,30 @@ private final class KeyThenPasswordAuth: NIOSSHClientUserAuthenticationDelegate,
 /// Validates host keys against `KnownHosts`, asking the user to approve
 /// keys for hosts we haven't seen and hard-failing on changed keys.
 private final class TOFUHostKeyValidator: NIOSSHClientServerAuthenticationDelegate, @unchecked Sendable {
-    private let endpoint: String
+    private let host: Host
     private let approve: @Sendable (String) async -> Bool
     private let lock = NSLock()
     private var _failure: SSHSessionError?
 
     var failure: SSHSessionError? { lock.withLock { _failure } }
 
-    init(endpoint: String, approve: @escaping @Sendable (String) async -> Bool) {
-        self.endpoint = endpoint
+    init(host: Host, approve: @escaping @Sendable (String) async -> Bool) {
+        self.host = host
         self.approve = approve
     }
 
     func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
         let key = String(openSSHPublicKey: hostKey)
-        switch KnownHosts.shared.check(endpoint: endpoint, key: key) {
+        switch KnownHosts.shared.check(host: host, key: key) {
         case .trusted:
             validationCompletePromise.succeed(())
 
         case .unknown(let fingerprint):
-            let endpoint = endpoint
+            let host = host
             let approve = approve
             Task {
                 if await approve(fingerprint) {
-                    KnownHosts.shared.trust(endpoint: endpoint, key: key)
+                    KnownHosts.shared.trust(host: host, key: key)
                     validationCompletePromise.succeed(())
                 } else {
                     self.fail(.hostKeyRejected, validationCompletePromise)

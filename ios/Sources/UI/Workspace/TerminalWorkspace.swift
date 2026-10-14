@@ -62,6 +62,40 @@ final class TerminalWorkspace: ObservableObject {
         await SessionLifecycle.shared.waitToRetry(after: delay)
     }
 
+    /// The phone's network as last seen.
+    @Published private(set) var network = NetworkMonitor.shared.current
+    /// Whether the phone's tailnet tunnel is up.
+    var tunnelUp: Bool { network.tunnel }
+
+    /// The host's routes as last learned.
+    var routes: [HostRoute] { (sessions?.host ?? host).routes }
+
+    /// The host can be reached through a tailnet, but this phone's tunnel
+    /// is down and the focused pane can't connect: say what to do.
+    var needsTunnel: Bool {
+        guard !tunnelUp, network.satisfied, routes.contains(where: { $0.kind == .tailnet }),
+              let pane = focusedPane else { return false }
+        return pane.reconnecting || (pane.ended && pane.surfaceView?.sessionDropped != false)
+    }
+
+    /// What the "Reconnecting…" overlay says.
+    var reconnectingLabel: String {
+        if !network.satisfied { return "Waiting for network…" }
+        if tunnelUp && routes.contains(where: { $0.kind == .tailnet }) { return "Reconnecting via tailnet…" }
+        switch network.interfaceType {
+        case .cellular: return "Reconnecting over cellular…"
+        case .wifi: return "Reconnecting over Wi-Fi…"
+        default: return "Reconnecting…"
+        }
+    }
+    /// How long the tunnel must stay up before connections move onto it.
+    var upgradeDelay: Duration = .seconds(5)
+    /// The shortest time between two handoffs of the same pane.
+    static let handOffInterval: Duration = .seconds(30)
+    private var networkToken: NetworkMonitor.Token?
+    private var upgradeTask: Task<Void, Never>?
+    private var lastHandOff: [UUID: ContinuousClock.Instant] = [:]
+
     /// Delays between attempts to attach to a dropped session again. It
     /// gives up after the last.
     static let retryDelays: [Duration] = [.milliseconds(500), .seconds(1), .seconds(2), .seconds(4),
@@ -134,9 +168,73 @@ final class TerminalWorkspace: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
+        networkToken = NetworkMonitor.shared.observe { [weak self] changes, network in
+            Task { @MainActor in self?.networkChanged(changes, network) }
+        }
         for pane in tabs.flatMap(\.tree.panes).compactMap({ panes[$0] }) {
             connect(pane)
         }
+    }
+
+    // MARK: Network changes
+
+    /// The phone's network changed: give up on connections whose network
+    /// is gone (so they attach again over one that works), check those
+    /// that may have survived, and move onto the tailnet once it's up.
+    func networkChanged(_ changes: [NetworkMonitor.Change], _ network: NetworkMonitor.Snapshot) {
+        self.network = network
+        let states = panes.values.map {
+            NetworkReaction.Pane(id: $0.id, route: $0.route?.kind,
+                                 connected: $0.isConnected, attached: $0.attachedToSession)
+        }
+        for (id, action) in NetworkReaction.actions(for: changes, on: network, panes: states) {
+            guard let pane = panes[id] else { continue }
+            switch action {
+            case .drop:
+                pane.dropConnection()
+            case .check:
+                Task {
+                    if await !pane.checkAlive(), pane.isConnected { pane.dropConnection() }
+                }
+            }
+        }
+        if changes.contains(.tunnelDown) { upgradeTask?.cancel() }
+        if changes.contains(.tunnelUp) { scheduleUpgrade() }
+    }
+
+    /// Once the tunnel has stayed up a while, move connections that aren't
+    /// on the tailnet onto it, so later network changes don't drop them.
+    private func scheduleUpgrade() {
+        upgradeTask?.cancel()
+        upgradeTask = Task { [weak self, upgradeDelay] in
+            try? await Task.sleep(for: upgradeDelay)
+            guard !Task.isCancelled, let self, self.tunnelUp else { return }
+            let routes = self.routes
+            let movable = self.panes.values.filter {
+                NetworkReaction.shouldMoveToTailnet(route: $0.route?.kind, connected: $0.isConnected,
+                                                     attached: $0.attachedToSession, hostRoutes: routes)
+            }
+            for pane in movable { self.handOff(pane) }
+        }
+    }
+
+    /// A better network appeared under a pane's connection (e.g. Wi-Fi
+    /// back after cellular): move it over once that has held a while.
+    private func betterPath(for pane: TerminalPane) {
+        guard pane.route?.kind != .tailnet else { return }
+        Task { [weak self, weak pane, upgradeDelay] in
+            try? await Task.sleep(for: upgradeDelay)
+            guard let self, let pane, self.panes[pane.id] === pane else { return }
+            self.handOff(pane)
+        }
+    }
+
+    private func handOff(_ pane: TerminalPane) {
+        let now = ContinuousClock.now
+        if let last = lastHandOff[pane.id], now - last < Self.handOffInterval { return }
+        guard pane.isConnected, !pane.isHandingOff else { return }
+        lastHandOff[pane.id] = now
+        pane.handOff()
     }
 
     /// End every pane, and its session on the host.
@@ -199,6 +297,10 @@ final class TerminalWorkspace: ObservableObject {
         pane.onKeyboardHandoff = { [weak self, weak pane] in
             guard let pane else { return }
             self?.pendingKeyboard = pane.id
+        }
+        pane.onBetterPath = { [weak self, weak pane] in
+            guard let self, let pane else { return }
+            self.betterPath(for: pane)
         }
         // One pane fetches the host's config; the others use the cache.
         pane.syncsRemoteConfig = panes.isEmpty

@@ -1,0 +1,18 @@
+// Who may reach what in the tailnet. Copy to config/policy.hujson and
+// replace "you@" with your Headscale user (keep the trailing @).
+//
+// The Mac is registered as a tagged device (tag:mac) and the phone as your
+// own. The phone may reach the Mac's SSH and nothing else; nothing may
+// reach the phone.
+{
+  "tagOwners": {
+    "tag:mac": ["you@"],
+  },
+  "grants": [
+    {
+      "src": ["you@"],
+      "dst": ["tag:mac"],
+      "ip": ["tcp:22"],
+    },
+  ],
+}

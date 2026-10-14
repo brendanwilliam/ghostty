@@ -1,4 +1,3 @@
-import Network
 import UIKit
 
 /// Keeps terminals going across the app's lifecycle. iOS suspends the app
@@ -20,20 +19,21 @@ final class SessionLifecycle {
     /// back), cutting retry delays short.
     private var wakeups = 0
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
-    private let monitor = NWPathMonitor()
+    private var networkToken: NetworkMonitor.Token?
     private var networkUp = true
 
     private init() {
-        monitor.pathUpdateHandler = { [weak self] path in
-            let up = path.status == .satisfied
-            Task { @MainActor in self?.networkChanged(up: up) }
+        networkToken = NetworkMonitor.shared.observe { [weak self] changes, network in
+            Task { @MainActor in self?.networkChanged(changes, up: network.satisfied) }
         }
-        monitor.start(queue: .main)
     }
 
-    private func networkChanged(up: Bool) {
-        if up && !networkUp { wakeups += 1 }
+    /// Retry early when there's a new way to reach hosts: the network
+    /// came back, the phone moved to another network, or the tailnet
+    /// tunnel came up.
+    private func networkChanged(_ changes: [NetworkMonitor.Change], up: Bool) {
         networkUp = up
+        if changes.contains(where: { [.cameUp, .switched, .tunnelUp].contains($0) }) { wakeups += 1 }
     }
 
     func didEnterBackground(_ store: WorkspaceStore) {

@@ -28,12 +28,115 @@ struct Host: Identifiable, Codable, Hashable {
     /// keep running while the app is closed.
     var keepsSessions = true
 
+    /// Other addresses for the same machine, learned from it once
+    /// connected: its tailnet address and its `.local` name.
+    var learnedRoutes: [HostRoute] = []
+
     var displayName: String { name.isEmpty ? hostname : name }
 
-    /// Key used for known-hosts and Keychain entries.
+    /// The address as entered (`hostname:port`).
     var endpoint: String { "\(hostname.lowercased()):\(port)" }
 
     var passwordAccount: String { "password-\(id.uuidString)" }
+
+    /// The address as entered.
+    var primaryRoute: HostRoute { HostRoute(address: hostname, port: port) }
+
+    /// Every way to reach the host, best first: tailnet addresses (which
+    /// keep working as the phone changes networks), then the local
+    /// network, then anything else. Ties keep the entered address first.
+    var routes: [HostRoute] {
+        var seen = Set<String>()
+        let all = ([primaryRoute] + learnedRoutes).filter { seen.insert($0.key).inserted }
+        return all.enumerated()
+            .sorted { ($0.element.kind.rank, $0.offset) < ($1.element.kind.rank, $1.offset) }
+            .map(\.element)
+    }
+
+    /// Adds routes the host reported about itself. Returns whether any
+    /// were new.
+    @discardableResult
+    mutating func learn(_ found: [HostRoute]) -> Bool {
+        let known = Set(routes.map(\.key))
+        let new = found.filter { !known.contains($0.key) && !$0.address.isEmpty }
+        // A route of a kind replaces an older learned one of that kind
+        // (the tailnet address can change if the Mac rejoins).
+        let kinds = Set(new.map(\.kind))
+        guard !new.isEmpty else { return false }
+        learnedRoutes.removeAll { kinds.contains($0.kind) }
+        learnedRoutes.append(contentsOf: new)
+        return true
+    }
+}
+
+/// One address a host can be reached at.
+struct HostRoute: Codable, Hashable {
+    enum Kind: String, Codable {
+        /// A tailnet (Tailscale/Headscale) address: stays the same as the
+        /// phone moves between networks.
+        case tailnet
+        /// Only reachable on the same local network.
+        case lan
+        /// Anything else, e.g. a public name.
+        case other
+
+        var label: String {
+            switch self {
+            case .tailnet: "Tailnet"
+            case .lan: "Local network"
+            case .other: "Address"
+            }
+        }
+
+        var rank: Int {
+            switch self {
+            case .tailnet: 0
+            case .lan: 1
+            case .other: 2
+            }
+        }
+    }
+
+    var address: String
+    var port: Int = 22
+    var kind: Kind
+
+    init(address: String, port: Int = 22, kind: Kind? = nil) {
+        self.address = address
+        self.port = port
+        self.kind = kind ?? Self.kind(of: address)
+    }
+
+    /// Identifies the route for de-duplication.
+    var key: String { "\(address.lowercased()):\(port)" }
+
+    /// Guess a route's kind from its address.
+    static func kind(of address: String) -> Kind {
+        let a = address.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]."))
+        if let v4 = ipv4(a) {
+            if v4[0] == 100 && (64...127).contains(v4[1]) { return .tailnet }
+            if v4[0] == 10 || (v4[0] == 172 && (16...31).contains(v4[1]))
+                || (v4[0] == 192 && v4[1] == 168) || (v4[0] == 169 && v4[1] == 254) {
+                return .lan
+            }
+            return .other
+        }
+        if a.contains(":") {
+            if a.hasPrefix("fd7a:115c:a1e0:") { return .tailnet }
+            if a.hasPrefix("fe80:") || a.hasPrefix("fc") || a.hasPrefix("fd") { return .lan }
+            return .other
+        }
+        if a.hasSuffix(".ts.net") { return .tailnet }
+        if a.hasSuffix(".local") { return .lan }
+        return .other
+    }
+
+    private static func ipv4(_ s: String) -> [Int]? {
+        let parts = s.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+        let octets = parts.compactMap { Int($0) }.filter { (0...255).contains($0) }
+        return octets.count == 4 ? octets : nil
+    }
 }
 
 extension Host {
@@ -41,7 +144,7 @@ extension Host {
     // newer fields) still load.
     private enum CodingKeys: String, CodingKey {
         case id, name, hostname, port, username, term, savesPassword, usesRemoteConfig, columns
-        case keepsSessions
+        case keepsSessions, learnedRoutes
     }
 
     init(from decoder: Decoder) throws {
@@ -56,6 +159,7 @@ extension Host {
         usesRemoteConfig = try c.decodeIfPresent(Bool.self, forKey: .usesRemoteConfig) ?? true
         columns = try c.decodeIfPresent(Int.self, forKey: .columns)
         keepsSessions = try c.decodeIfPresent(Bool.self, forKey: .keepsSessions) ?? true
+        learnedRoutes = try c.decodeIfPresent([HostRoute].self, forKey: .learnedRoutes) ?? []
     }
 }
 
@@ -89,6 +193,13 @@ final class HostStore: ObservableObject {
         hosts.removeAll { $0.id == host.id }
         try? Keychain.delete(host.passwordAccount)
         RemoteConfigCache(hostID: host.id).clear()
+        save()
+    }
+
+    /// Remember other addresses a host reported for itself.
+    func learnRoutes(_ routes: [HostRoute], for hostID: UUID) {
+        guard let index = hosts.firstIndex(where: { $0.id == hostID }),
+              hosts[index].learn(routes) else { return }
         save()
     }
 
