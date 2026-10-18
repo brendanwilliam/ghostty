@@ -64,7 +64,7 @@ process as the app, with no fork/exec and no JIT.
 
 ## Not done / follow-ups before shipping
 
-- **App Store: extension modules.** The 67 `.so` files in `lib-dynload` are
+- **App Store: extension modules** (done in the app's build phase; see ios/README.md). The 67 `.so` files in `lib-dynload` are
   loose files, which App Review rejects on device. BeeWare's testbed
   (`Python.xcframework/build/utils.sh`, `install_python`) converts each into
   its own framework with a stub left in the stdlib. The simulator doesn't

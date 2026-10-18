@@ -118,9 +118,10 @@ targets:
           ditto "$SRCROOT/Terminfo" "$dst"
       # CPython's standard library, without what a terminal doesn't need
       # (tests, IDLE, tkinter, ensurepip...). PYTHONHOME is <app>/python.
-      # The extension modules (lib-dynload) are loose .so files here, which
-      # the simulator accepts; on a device App Review requires each to be
-      # a framework (see ios/README.md, Python).
+      # App Review rejects loose .so files, so each extension module
+      # (lib-dynload) becomes its own framework in <app>/Frameworks, and a
+      # <module>.fwork file where the .so was tells Python's importer where
+      # the framework is. This is the layout BeeWare's install_python makes.
       - name: Bundle the Python standard library
         basedOnDependencyAnalysis: false
         script: |
@@ -129,7 +130,13 @@ targets:
             echo "warning: $xcf not found. Run scripts/fetch-python.sh; the local shell won't have python3."
             exit 0
           fi
-          if [ "$PLATFORM_NAME" = "iphonesimulator" ]; then slice=ios-arm64_x86_64-simulator; else slice=ios-arm64; fi
+          if [ "$PLATFORM_NAME" = "iphonesimulator" ]; then
+            slice=ios-arm64_x86_64-simulator
+            platform=iPhoneSimulator
+          else
+            slice=ios-arm64
+            platform=iPhoneOS
+          fi
           dst="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/python/lib"
           rm -rf "$dst"
           mkdir -p "$dst"
@@ -140,6 +147,28 @@ targets:
             config-3.14-* __phello__ site-packages/README.txt
           find . -name __pycache__ -prune -exec rm -rf {} +
           find . -name "_test*" -o -name "_tkinter*" -o -name "_xxtestfuzz*" -o -name "_ctypes_test*" | xargs rm -rf
+
+          frameworks="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH"
+          mkdir -p "$frameworks"
+          for so in lib-dynload/*.so; do
+            file=$(basename "$so")
+            name=${file%%.*}
+            fw="$frameworks/$name.framework"
+            rm -rf "$fw"
+            mkdir -p "$fw"
+            mv "$so" "$fw/$name"
+            install_name_tool -id "@rpath/$name.framework/$name" "$fw/$name"
+            cp "$xcf/build/iOS-dylib-Info-template.plist" "$fw/Info.plist"
+            plutil -replace CFBundleExecutable -string "$name" "$fw/Info.plist"
+            plutil -replace CFBundleIdentifier -string "$(echo "$PRODUCT_BUNDLE_IDENTIFIER.$name" | tr _ -)" "$fw/Info.plist"
+            plutil -replace CFBundleSupportedPlatforms -json "[\"$platform\"]" "$fw/Info.plist"
+            # Where Python finds it: the placeholder, and a way back.
+            echo "Frameworks/$name.framework/$name" > "lib-dynload/${file%.so}.fwork"
+            echo "python/lib/python3.14/lib-dynload/${file%.so}.fwork" > "$fw/$name.origin"
+            if [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
+              codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --timestamp=none "$fw"
+            fi
+          done
       # dash finds commands by looking for executable files on PATH, and
       # ios_system puts <app>/Library/bin on it. The commands themselves are
       # in the frameworks; these empty files only make dash see them (and

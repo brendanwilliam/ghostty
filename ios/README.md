@@ -92,12 +92,19 @@ program from stdin).
   or other C call ends when it returns.
 - **Limits.** No `subprocess` or `fork` (iOS), no `pip`, no GUI modules.
   At most six tabs can run a shell at once (ios_system's six dash copies).
-- **Before a device or App Store build.** The extension modules
-  (`lib-dynload`, 56 `.so` files) are loose files here, which the simulator
-  accepts. App Review requires each to be a framework; BeeWare's
-  `install_python` converts them. That step isn't wired in yet, and Python's
-  license needs an acknowledgements screen. `Spikes/Python/README.md` has the
-  spike's findings.
+- **App Store layout.** App Review rejects loose `.so` files, so the build
+  phase turns each of the 56 extension modules in `lib-dynload` into its own
+  framework in `<app>/Frameworks` (`_json.framework`, ...) and leaves a
+  `<module>.fwork` file where the `.so` was, which Python's importer follows.
+  It's the layout BeeWare's `install_python` makes, done in the same build
+  phase on the simulator and on a device, so the tests cover it. A device
+  build of this layout compiles (checked unsigned); signing and upload
+  haven't been run.
+- **Licenses.** Settings > Acknowledgements lists the bundled software and
+  shows each license text (`Resources/Licenses/`, `UI/Settings/
+  AcknowledgementsView.swift`), including Python's. Add an entry and a text
+  file when adding a library; `AcknowledgementsTests` checks every entry has
+  its text. `Spikes/Python/README.md` has the spike's findings.
 
 **Building dash.** `ios/scripts/build-dash.sh` builds dash and its copies
 (dashA to dashE) from holzschu/dash_iOS at a pinned commit, with the patch,
