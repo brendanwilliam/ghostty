@@ -1,5 +1,5 @@
 #!/bin/sh
-# dash, vim and lg2 are only published for devices (arm64) and Intel
+# vim and lg2 are only published for devices (arm64) and Intel
 # simulators, so an Apple-silicon simulator can't load them. The code is the
 # same; only the platform in the Mach-O header differs. This copies the
 # device builds into ios/Frameworks-sim/ with the platform changed to the
@@ -13,7 +13,8 @@ out=Frameworks-sim
 rm -rf "$out"
 mkdir -p "$out"
 
-for name in dash dashA dashB dashC dashD dashE vim lg2; do
+# dash is built with a simulator slice by scripts/build-dash.sh.
+for name in vim lg2; do
     src="Frameworks/$name.xcframework/ios-arm64/$name.framework"
     if [ ! -d "$src" ]; then
         echo "missing $src; run scripts/fetch-ios-system.sh first" >&2

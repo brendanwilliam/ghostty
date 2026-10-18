@@ -48,11 +48,13 @@ libghostty draws it like any other session.
   echoes and edits typed lines itself (`LineDiscipline`), and passes raw
   bytes through while a full-screen program (vim, less) has the keyboard.
 - **Ctrl-C:** stops commands that wait for input or print output (`cat`,
-  `find`, ...), and gives a fresh prompt when dash is idle. A command that
-  computes without ever blocking (`while true; do :; done`) can't be
-  interrupted: ios_system stops commands with `pthread_cancel`, which needs
-  a blocking call to act on. The app says so, and closing the tab leaves
-  that thread spinning until the app quits. Fixing it needs a patched dash.
+  `find`, ...), and gives a fresh prompt when dash is idle. A loop in dash
+  itself (`while true; do :; done`) is stopped by our build of dash
+  (`Patches/dash-ios.patch`), which checks an interrupt flag between
+  commands. Any other command that computes without ever blocking (an awk
+  loop) can't be stopped: ios_system uses `pthread_cancel`, which needs a
+  blocking call. The app says so, and closing the tab leaves that thread
+  spinning until the app quits.
 - **Lifetime:** iOS suspends the app in the background, which pauses
   commands. Local tabs aren't saved; they start fresh with the app.
 - **How dash finds commands:** it looks for executable files on `PATH`, and
@@ -63,275 +65,25 @@ libghostty draws it like any other session.
   starts (`LocalEnvironment.prepareProcess`). libghostty keeps a pointer to
   `environ` from startup, so nothing may add to it later.
 
-**Simulator.** dash, vim and lg2 are only published for devices (and Intel
+**Building dash.** `ios/scripts/build-dash.sh` builds dash and its copies
+(dashA to dashE) from holzschu/dash_iOS at a pinned commit, with the patch,
+for device and for the arm64 simulator, and replaces the prebuilt
+`Frameworks/dash*.xcframework`. Run it after `fetch-ios-system.sh`, then
+`xcodegen generate`. Without it the prebuilt dash works on devices but
+can't stop a loop.
+
+**Terminal definitions.** A device has no terminfo, so `Terminfo/` (compiled
+with `tic` from xterm-256color and Ghostty's entry) is bundled and
+`TERMINFO` points at it; this is what dash's "Cannot read termcap database"
+warning needed.
+
+**Simulator.** vim and lg2 are only published for devices (and Intel
 simulators), so an Apple-silicon simulator can't load them as shipped. Run
 `ios/scripts/make-sim-frameworks.sh` (after `fetch-ios-system.sh`) to make
 simulator copies of them (the device builds with their platform changed,
 signed ad hoc; local testing only, never shipped), then `xcodegen generate`.
-Without them the simulator falls back to a small built-in prompt
+dash comes from `build-dash.sh` above. Without a dash simulator slice the
+simulator falls back to a small built-in prompt
 (`LocalBackend.Shell.builtin`) that supports pipes and redirection but not
 `&&`, `;` or variables. `LocalBackendTests` always use the built-in prompt;
 `LocalDashTests` run the real shell wherever dash is embedded.
-
-`ios/Spikes/LocalShell` holds the throwaway app used to try ios_system out;
-its README records what worked and what didn't.
-
-## Configuration
-
-Each terminal uses a layered Ghostty config. Later layers win:
-
-1. **App defaults:** `Resources/defaults.ghostty`.
-2. **The host's own Ghostty config:** fetched over SSH each time you connect,
-   before the shell opens, and cached per host.
-   - It reads the standard locations (`~/.config/ghostty/config[.ghostty]` and
-     `~/Library/Application Support/com.mitchellh.ghostty/config[.ghostty]`)
-     and follows `config-file` includes.
-   - Custom themes are fetched too.
-   - Options that don't apply on the phone are dropped: `command`,
-     `initial-command`, `working-directory`, keybinds, and `macos-*`/`gtk-*`
-     window options. Settings → Host configs lists what was dropped.
-   - You can turn this off per host.
-3. **Settings:** the app's own `config.ghostty`, in `Library/Application Support/config/ghostty/` (which the app sets as `XDG_CONFIG_HOME`; the container root isn't writable on a device).
-   - Settings has quick controls for common options, an **All options** list
-     covering every Ghostty option with its docs, and a raw file editor.
-   - Edits are checked with libghostty before they're saved, and they apply to
-     open terminals immediately.
-
-Fonts the phone doesn't have (e.g. a Mac-only font) fall back to the built-in
-JetBrains Mono.
-
-**Terminal width.** Settings sets how many columns fit across the screen in
-portrait (default 80). The font is scaled to fit, and landscape keeps the same
-font, so it shows more columns. Pinching a terminal sets a custom width for
-that host.
-
-**Option catalog.** `Resources/ConfigCatalog.json` is generated from
-Ghostty's docs. To regenerate it:
-
-```sh
-zig build -Demit-webdata=true -Demit-xcframework=false -Demit-macos-app=false -Dapp-runtime=none --prefix /tmp/webdata
-ghostty +show-config --default > /tmp/defaults.txt
-ios/scripts/gen-config-catalog.py /tmp/webdata/share/ghostty/webdata/config.mdx /tmp/defaults.txt > ios/Resources/ConfigCatalog.json
-```
-
-## Touch
-
-When the running program tracks the mouse (Claude Code's `/tui fullscreen`,
-vim with `mouse=a`, htop, tmux, and others), touches are sent to it as mouse
-events. libghostty encodes them in whatever format the program asked for.
-
-| Gesture | Mouse-aware program | Otherwise |
-| --- | --- | --- |
-| Tap | Click at that cell (the keyboard isn't touched) | Show the keyboard, or clear the selection |
-| One-finger drag | Mouse wheel | Scrollback (arrow keys in pagers like `less`) |
-| Flick | Keeps scrolling and slows down, like an iOS list; any touch stops it | Same |
-| Long-press and drag | Select text (sent with Shift, so the program doesn't see it) | Select text |
-| Two-finger tap | Show or hide the keyboard | Show or hide the keyboard |
-| Pinch | Zoom | Zoom |
-
-Setting `mouse-reporting = false` in Settings turns this off.
-
-## Key bar
-
-The row above the keyboard has Escape, Control, Option, Command, Shift, and
-Tab (shown with their Apple keyboard symbols), arrows, and a few symbols. The
-row scrolls; the hide-keyboard key stays pinned at its right edge.
-
-Control, Option, Command, and Shift latch: tap one, then the next key you type
-gets it. Command makes Ghostty's shortcuts reachable without a hardware
-keyboard (Cmd+T new tab, Cmd+D split, Cmd+V paste, Cmd+K clear). Option+Backspace
-deletes a word.
-
-## Dictation
-
-The keyboard's microphone key works. Words are typed into the terminal as you
-speak, so they appear in the program's own input (Claude Code's prompt, the
-shell line) and wrap there. When dictation revises a word it already typed,
-only the changed part is backspaced over and retyped. Input methods that
-compose text (Japanese, Chinese) show their marked text underlined at the
-cursor and send it once it's chosen.
-
-Dictation never presses Return. A dictated new line is sent as a pasted
-newline when the program uses bracketed paste (Claude Code, zsh, fish), so it
-adds a line instead of sending the message or running the command. Elsewhere
-it's dropped.
-
-## Tabs and splits
-
-Each tab or split is another shell on the same host, over its own SSH
-connection. Use the toolbar's tabs menu or Ghostty's usual keybinds from a
-hardware keyboard (Cmd+T, Cmd+D / Cmd+Shift+D, Cmd+[ / Cmd+], Cmd+W, and so on;
-your Mac config's `keybind` lines aren't imported).
-
-- **Split** stacks panes in portrait (Ghostty's split down) and puts them side
-  by side in landscape (split right). The menu also offers the other direction.
-- Tap a pane to focus it. That tap isn't sent to the program, even one that
-  tracks the mouse. Unfocused panes are dimmed (`unfocused-split-opacity`).
-- Drag a divider to resize; double-tap it to equalize. Zoom shows the focused
-  split alone.
-- Panes in a split use the font a lone pane would (fitted to your column count
-  across the full screen) and show however many columns fit.
-- `exit` closes just that pane; closing the last tab goes back to the host
-  list. A dropped connection leaves the pane open with **Reconnect**.
-- Going back to the host list (or anywhere else in the app) leaves a host's tabs
-  running; the host shows "2 tabs open", and opening it returns to them. Swipe
-  the host and tap **End Sessions** to end them all.
-
-## Sessions that survive the app
-
-iOS suspends the app soon after you leave it and may quit it at any time, and
-that drops its SSH connections. When the host has
-[zmx](https://github.com/neurosnap/zmx), each tab runs its shell inside a zmx
-session on the host instead, so it keeps running (Claude Code included) while
-the app is in the background, swiped away, or relaunched.
-
-- Coming back reattaches each pane. zmx redraws the screen as it attaches, and
-  the old screen stays up until it has, so there's no blank flash.
-- A dropped connection reattaches by itself ("Reconnecting…"), backing off,
-  and retries as soon as the network comes back. **Reconnect** appears only
-  if that gives up.
-- The tabs and splits are saved. After a relaunch the host still shows
-  "3 tabs open", and opening it restores the layout with every pane attached
-  to its session.
-- `exit` ends a pane's session. Closing a tab or split (Cmd+W, the menu) and
-  **End Sessions** end their sessions on the host too. If the host can't be
-  reached, they're ended the next time it can.
-- Sessions are named `gios-<device>-<pane>`. On the Mac, `zmx list` shows them
-  and `zmx attach gios-…` opens the same shell there.
-- If a host doesn't have zmx, a banner offers to install it with Homebrew
-  (`brew install neurosnap/tap/zmx`). Until then tabs are plain shells that
-  end with the connection. Turn it off per host with **Keep sessions running**.
-
-The app runs `$SHELL -lc '… zmx attach <name>'` as the PTY's command (an SSH
-exec request with a PTY, like `ssh -t`). That needs one addition to Citadel,
-so the project pins a fork of Citadel 0.12.0 with `withPTY(_:command:)`.
-
-## Connect to your Mac
-
-1. On the Mac, turn on **System Settings → General → Sharing → Remote Login**.
-2. In the app, tap the key icon and the copy icon on the command (it turns into a
-   green checkmark; "Show full command" shows it in full). Every command in the
-   app that you're meant to copy looks and works the same way. Paste it into
-   Terminal on the Mac, e.g. with Universal Clipboard, and press Return. It
-   adds this device's public key to `~/.ssh/authorized_keys` (creating the
-   folder and file with the right permissions if needed, and skipping the key
-   if it's already there) and prints "✓ Connected". The key is hidden on the
-   screen until you tap the eye icon, so screenshots are safe; copying works
-   either way. The **SSH key** section shows the same for the key itself, and
-   can generate a new one.
-3. Add the Mac. It shows up under **On this network** through Bonjour, or you
-   can enter its hostname (`Your-Mac.local`) and your username.
-4. On the first connection, compare the host key fingerprint with the output
-   of `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the Mac.
-
-If the server refuses the key, the app asks for a password. A password can
-also be saved per host in the Keychain.
-
-## Away from home and changing networks
-
-Away from home (cellular, another Wi-Fi network) the Mac sits behind your
-router and can't be reached directly. [`deploy/headscale`](deploy/headscale)
-sets up [Headscale](https://github.com/juanfont/headscale), the open-source
-Tailscale coordination server, on a small server of your own. Your Mac and
-iPhone then join a private tailnet and reach each other from anywhere,
-directly or through your server's relay (end-to-end encrypted either way).
-Follow [its README](deploy/headscale/README.md).
-
-- **Routes.** Once connected, the app learns the Mac's other addresses from it
-  (its tailnet address and its `.local` name; see **Other addresses** in host
-  settings). Each connection races them, tailnet first when this phone's
-  tunnel is up, the next starting 300 ms after the one before; the first to
-  connect wins. Every address must present the host key trusted for the Mac
-  (keys are pinned per host, not per address), so a different machine
-  answering on one is refused.
-- **Changing networks.** A connection over the tailnet keeps its address as
-  the phone moves between Wi-Fi and cellular, so it usually carries on. The app
-  watches the network (Network.framework, with TCP keepalives) and, when it
-  changes, drops connections that can't have survived (a local-network route
-  once off Wi-Fi) and checks the rest. Dropped panes attach to their zmx
-  sessions again over whatever route works now.
-- **Moving without a gap.** When the tunnel comes up (and stays up for 5 s),
-  or a better network appears, panes not on the tailnet move onto it: a second
-  connection attaches to the same zmx session, and once zmx has redrawn the
-  screen it takes over and the old one is closed. Keys go to the old
-  connection until then, so none are lost or sent twice.
-- If the Mac can only be reached through the tailnet and this phone's tunnel
-  is off, a banner says to turn on Tailscale.
-- **Sleep.** An asleep Mac can't be reached and its sessions pause. The app
-  keeps the Mac awake while a phone is attached (`caffeinate -i`), and shows a
-  tip if it sleeps when idle: `sudo pmset -c sleep 0` keeps it awake on power.
-
-The Network.framework transport needs one more addition to the Citadel fork,
-`SSHClient.connect(to:bootstrap:prehandlers:)`.
-
-## Architecture
-
-```
-SwiftUI (UI/)  ──►  TerminalSurfaceView (Ghostty/)  ──►  libghostty surface
-                         │      ▲                         (manual IO mode)
-                 write/resize   │ output
-                         ▼      │
-                    TerminalBackend (Session/)
-                         │
-                    SSHBackend (SSH/, Citadel + SwiftNIO SSH)
-```
-
-- **Manual IO mode.** iOS can't spawn processes, so this fork adds a `manual`
-  termio backend to libghostty (`src/termio/Manual.zig`). The host feeds
-  program output with `ghostty_surface_write_output` and receives terminal
-  input through `io_write_cb`/`io_resize_cb` on `ghostty_surface_config_s`.
-  `ghostty_surface_session_exited` ends the session.
-- **`TerminalBackend`** is the seam for future backends. A local on-device
-  runtime (so CLI tools and Claude Code can run on the phone) would implement
-  the same protocol. No Ghostty or UI changes are needed for that.
-- **Keys.** An Ed25519 device key is generated with CryptoKit and stored in
-  the Keychain (`AfterFirstUnlockThisDeviceOnly`, not synced).
-- **Host keys.** Host keys are trusted on first use after you confirm the
-  fingerprint, and pinned to the saved host, so every route to it must
-  present the same key. A changed key fails the connection; you have to
-  forget the old key in host settings before connecting again. Changing a
-  host's address in its settings starts over, as for a new host.
-
-## Tests
-
-```sh
-cd ios
-xcodebuild test -project GhosttyiOS.xcodeproj -scheme GhosttyiOS \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
-```
-
-The SSH integration tests run against a real sshd when these variables are
-set. A throwaway `sshd -f <config>` running as your user on a high port works:
-
-```sh
-TEST_RUNNER_GHOSTTY_TEST_SSH_PORT=2222 \
-TEST_RUNNER_GHOSTTY_TEST_SSH_USER=$USER \
-TEST_RUNNER_GHOSTTY_TEST_SSH_KEY_SEED=<hex ed25519 seed> \
-xcodebuild test ...
-```
-
-With zmx installed on that host, `TEST_RUNNER_GHOSTTY_TEST_ZMX=1` also runs
-a session through a dropped connection and back, and moves one to a second
-connection. The route tests need the sshd to listen on both `127.0.0.1` and
-`::1` (`ListenAddress` twice).
-
-To also test the config fetch, add `SetEnv XDG_CONFIG_HOME=<fixture>` to that
-sshd's config. The fixture's `ghostty/config` should set
-`cursor-style = underline` and an `initial-command`, and include
-(`config-file = extra.ghostty`) a file that sets
-`scrollback-limit-lines = 4242`. Then set
-`TEST_RUNNER_GHOSTTY_TEST_SSH_CONFIG_FIXTURE=1`.
-
-`TEST_RUNNER_GHOSTTY_TEST_VISUAL=1` shows sample output full screen for 8
-seconds so you can screenshot it. It uses a theme, an 80-column fit, and the
-key bar. `TEST_RUNNER_GHOSTTY_TEST_VISUAL_SETTINGS=1` does the same for the
-Settings screen. `TEST_RUNNER_GHOSTTY_TEST_VISUAL_SPLITS=1` shows two tabs,
-one split in two.
-
-## Not yet supported
-
-- Local (on-device) shells.
-- Files app integration.
-- Restoring tabs and splits after a relaunch on hosts without zmx.
-- A confirmation UI for OSC 52 clipboard access (these requests are denied).
-- Agent forwarding, port forwarding, and jump hosts.

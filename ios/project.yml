@@ -51,6 +51,14 @@ targets:
           rm -rf "$dst"
           mkdir -p "$(dirname "$dst")"
           ditto "$src" "$dst"
+      # Terminal definitions for the local shell (TERMINFO points here),
+      # compiled with tic from xterm-256color and Ghostty's own entry.
+      - name: Copy terminfo
+        basedOnDependencyAnalysis: false
+        script: |
+          dst="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/terminfo"
+          rm -rf "$dst"
+          ditto "$SRCROOT/Terminfo" "$dst"
       # dash finds commands by looking for executable files on PATH, and
       # ios_system puts <app>/Library/bin on it. The commands themselves are
       # in the frameworks; these empty files only make dash see them (and
@@ -85,16 +93,19 @@ targets:
             fi
           }
           if [ "$PLATFORM_NAME" = "iphonesimulator" ]; then
-            if [ ! -d "$SRCROOT/Frameworks-sim" ]; then
-              echo "note: run scripts/make-sim-frameworks.sh to run dash on the simulator; the local terminal uses its built-in prompt without it."
-              exit 0
-            fi
-            for name in dash dashA dashB dashC dashD dashE vim lg2; do
+            # dash is built here with an arm64 simulator slice. vim and lg2
+            # only ship device builds, which scripts/make-sim-frameworks.sh
+            # re-tags into Frameworks-sim/.
+            for name in vim lg2; do
+              if [ ! -d "$SRCROOT/Frameworks-sim/$name.framework" ]; then
+                echo "note: run scripts/make-sim-frameworks.sh to run $name on the simulator."
+                continue
+              fi
               rm -rf "$dst/$name.framework"
               ditto "$SRCROOT/Frameworks-sim/$name.framework" "$dst/$name.framework"
             done
-            slices='^ios-.*simulator$'
-            deps="lua_ios libssh2 openssl"
+            slices='^ios-arm64(_arm64e)?-simulator$|^ios-.*simulator$'
+            deps="dash dashA dashB dashC dashD dashE lua_ios libssh2 openssl"
           else
             slices='^ios-arm64(_arm64e)?$'
             deps="dash dashA dashB dashC dashD dashE vim lua_ios lg2 libssh2 openssl"
@@ -106,6 +117,10 @@ targets:
               continue
             fi
             slice=$(ls "$xcf" | grep -E "$slices" | head -1)
+            if [ "$PLATFORM_NAME" = "iphonesimulator" ] && ! lipo -archs "$xcf/$slice/$name.framework/$name" | grep -qw arm64; then
+              echo "note: $name has no arm64 simulator slice; run scripts/build-dash.sh (dash) or make-sim-frameworks.sh."
+              continue
+            fi
             rm -rf "$dst/$name.framework"
             ditto "$xcf/$slice/$name.framework" "$dst/$name.framework"
             sign "$name"

@@ -130,7 +130,19 @@ final class LocalBackend: TerminalBackend, @unchecked Sendable {
             return closed
         }
         guard !wasClosed else { return }
-        if lock.withLock({ running }) { killCommand() }
+        if shell == .dash {
+            // End of input is how a shell is meant to be left; it also
+            // avoids `ios_kill` running dash's own signal handler off its
+            // thread. A child command or a loop still has to be stopped.
+            let writer = lock.withLock { () -> FileHandle? in
+                defer { stdinWriter = nil }
+                return stdinWriter
+            }
+            try? writer?.close()
+            if lock.withLock({ running }) { killCommand(innermostOnly: true) }
+        } else if lock.withLock({ running }) {
+            killCommand()
+        }
         // The tab ends now, even if a command that ignores `ios_kill` is
         // still running on the command queue.
         outputPipe.fileHandleForReading.readabilityHandler = nil
@@ -193,9 +205,11 @@ final class LocalBackend: TerminalBackend, @unchecked Sendable {
     /// Nothing else reaches such a thread. Dash installs no SIGINT handler;
     /// SIGSEGV lands in libghostty's crash reporter; and terminating the
     /// thread (tried) leaves ios_system's internal locks held, which stops
-    /// every session. So the user is told, and can close the tab, which
-    /// leaves the thread spinning until the app is quit. Fixing this needs
-    /// the command to poll for an interrupt itself (a patched dash).
+    /// every session. So the command has to stop itself: our build of dash
+    /// (Patches/dash-ios.patch) checks a flag between commands, and
+    /// `requestDashInterrupt` sets it. Any other command that computes
+    /// without blocking still can't be stopped: the user is told, and can
+    /// close the tab, which leaves the thread spinning until the app quits.
     private func interruptCommand() {
         let (previous, idle, writer) = lock.withLock { (interruptedAt, promptShown, stdinWriter) }
         if shell == .dash && idle {
@@ -209,6 +223,25 @@ final class LocalBackend: TerminalBackend, @unchecked Sendable {
         }
         lock.withLock { interruptedAt = Date() }
         killCommand(innermostOnly: shell == .dash)
+    }
+
+    /// Asks the copy of dash running on `thread` to stop what it's doing.
+    /// dash, dashA...dashE are separate binaries, each with its own flag
+    /// and a target thread, so every loaded copy is asked and only the one
+    /// running on that thread acts.
+    private static func requestDashInterrupt(on thread: pthread_t) {
+        guard let frameworks = Bundle.main.privateFrameworksURL else { return }
+        for name in ["dash", "dashA", "dashB", "dashC", "dashD", "dashE"] {
+            let path = frameworks.appendingPathComponent("\(name).framework/\(name)").path
+            // RTLD_NOLOAD: only a copy ios_system has already loaded.
+            // Every dlopen is balanced: ios_system unloads a finished
+            // command, and a leftover reference keeps its old state alive.
+            guard let handle = dlopen(path, RTLD_NOLOAD) else { continue }
+            defer { dlclose(handle) }
+            guard let symbol = dlsym(handle, "dash_request_interrupt") else { continue }
+            typealias Request = @convention(c) (pthread_t) -> Void
+            unsafeBitCast(symbol, to: Request.self)(thread)
+        }
     }
 
     /// `ios_kill` looks up the process's SIGINT handler, and if there is
@@ -235,6 +268,9 @@ final class LocalBackend: TerminalBackend, @unchecked Sendable {
                 // Cancel the innermost command, not the shell running it.
                 if let last = ios_getLastThreadId(), last != ios_getThreadId(root) {
                     pthread_cancel(last)
+                } else if let shell = ios_getThreadId(root) {
+                    // No child: dash itself is busy, in a loop.
+                    LocalBackend.requestDashInterrupt(on: shell)
                 }
             }
         }

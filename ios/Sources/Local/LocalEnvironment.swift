@@ -44,6 +44,13 @@ enum LocalEnvironment {
         initializeEnvironment()
         setenv("HOME", home.path, 1)
         setenv("TERM", "xterm-256color", 1)
+        // A device has no system terminfo; without these, dash's line
+        // editing library prints "Cannot read termcap database".
+        if let terminfo = Bundle.main.resourceURL?.appendingPathComponent("terminfo"),
+           FileManager.default.fileExists(atPath: terminfo.path) {
+            setenv("TERMINFO", terminfo.path, 1)
+            setenv("TERMINFO_DIRS", terminfo.path, 1)
+        }
         setenv("LANG", "en_US.UTF-8", 1)
         setenv("LC_CTYPE", "UTF-8", 1)
         // dash reads this when it starts interactively.

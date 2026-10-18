@@ -8,6 +8,20 @@ final class LocalDashTests: XCTestCase {
         try XCTSkipUnless(LocalEnvironment.hasDash, "dash only runs on a device")
     }
 
+    /// dash used to print "Cannot read termcap database" while it ran with
+    /// TERM=xterm and no terminal definitions; the process environment now
+    /// sets TERM before it starts.
+    func testStartingTheShellPrintsNoTermcapWarning() async throws {
+        let session = try await LocalTestSession(shell: .dash)
+        try await session.type("echo $TERM\r")
+        let terminfo = try XCTUnwrap(Bundle.main.resourceURL).appendingPathComponent("terminfo/78/xterm-256color")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: terminfo.path))
+        XCTAssertEqual(getenv("TERMINFO").map { String(cString: $0) },
+                       terminfo.deletingLastPathComponent().deletingLastPathComponent().path)
+        XCTAssertFalse(session.text.localizedCaseInsensitiveContains("termcap"), session.text.debugDescription)
+        XCTAssertTrue(session.text.contains("xterm-256color\r\n"), session.text.debugDescription)
+    }
+
     func testShellSyntaxWorks() async throws {
         let session = try await LocalTestSession(shell: .dash)
         try await session.type("echo a && echo b; for i in 1 2; do echo n$i; done\r")
@@ -46,6 +60,41 @@ final class LocalDashTests: XCTestCase {
         // The shell is still there.
         try await session.type("echo alive\r")
         XCTAssertTrue(session.text.contains("alive\r\n"), session.text.debugDescription)
+    }
+
+    /// A loop that never blocks can't be cancelled from outside; the
+    /// patched dash stops it itself.
+    func testControlCStopsALoopThatNeverBlocks() async throws {
+        let session = try await LocalTestSession(shell: .dash)
+        let other = try await LocalTestSession(shell: .dash)
+        session.backend.write(Data("while true; do :; done\r".utf8))
+        try await session.waitFor { $0.hasSuffix("done\r\n") }
+        try await Task.sleep(for: .milliseconds(500))
+        session.backend.write(Data("\u{3}".utf8))
+        try await session.waitFor { $0.contains("^C") && $0.hasSuffix(" $ ") }
+        XCTAssertFalse(session.text.contains("can't interrupt"), session.text.debugDescription)
+        try await session.type("echo alive\r")
+        XCTAssertTrue(session.text.contains("alive\r\n"), session.text.debugDescription)
+        // The other tab never noticed.
+        try await other.type("echo untouched\r")
+        XCTAssertTrue(other.text.contains("untouched\r\n"), other.text.debugDescription)
+        XCTAssertFalse(other.text.contains("^C"), other.text.debugDescription)
+    }
+
+    /// Asking dash to stop must not pin its framework: there are only six
+    /// copies (dash, dashA...dashE), and an interrupted shell's copy has to
+    /// come back for the next one.
+    func testInterruptedShellsGiveTheirCopiesBack() async throws {
+        for _ in 1...8 {
+            let session = try await LocalTestSession(shell: .dash)
+            session.backend.write(Data("while true; do :; done\r".utf8))
+            try await session.waitFor { $0.hasSuffix("done\r\n") }
+            try await Task.sleep(for: .milliseconds(200))
+            session.backend.write(Data("\u{3}".utf8))
+            try await session.waitFor { $0.contains("^C") && $0.hasSuffix(" $ ") }
+            session.backend.write(Data("exit\r".utf8))
+            try await session.waitFor { _ in session.hasExited }
+        }
     }
 
     func testHistoryRecallsTheLastLine() async throws {
