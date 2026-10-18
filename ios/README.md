@@ -14,6 +14,7 @@ Requirements: Xcode 27, [Zig 0.16.0](https://ziglang.org/download/), and
 ```sh
 # Prebuilt command frameworks for the on-device shell (checked by SHA-256).
 ios/scripts/fetch-ios-system.sh
+ios/scripts/fetch-python.sh   # CPython 3.14 for the `python3` command
 
 # From the repository root: build GhosttyKit with iOS device and simulator slices.
 zig build -Demit-xcframework=true -Demit-macos-app=false -Dxcframework-target=ios
@@ -64,6 +65,14 @@ libghostty draws it like any other session.
   `TERM`, `ENV` and the rest are set once at launch, before libghostty
   starts (`LocalEnvironment.prepareProcess`). libghostty keeps a pointer to
   `environ` from startup, so nothing may add to it later.
+
+**Python.** `Python.xcframework` (BeeWare's Python-Apple-support) is
+embedded, with the standard library trimmed in a build phase and six copies
+of the small `Python/pycmd.c` framework (`pycmd`, `pythonA` to `pythonE`;
+ios_system won't run one framework twice). The `python3` command itself is
+not registered in the shell yet. Extension modules (`lib-dynload`) are loose
+`.so` files, fine for the simulator but they must become frameworks before a
+device or App Store build. See `Spikes/Python/README.md`.
 
 **Building dash.** `ios/scripts/build-dash.sh` builds dash and its copies
 (dashA to dashE) from holzschu/dash_iOS at a pinned commit, with the patch,

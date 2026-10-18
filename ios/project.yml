@@ -24,7 +24,64 @@ packages:
   swift-nio-transport-services:
     url: https://github.com/apple/swift-nio-transport-services.git
     from: 1.28.0
+targetTemplates:
+  # `python3` as an ios_system command (Python/pycmd.c). ios_system won't
+  # run one framework twice, so there are six copies from the same source:
+  # pycmd, and pythonA...pythonE, named after the command. (Not `python`:
+  # it would clash with Python.framework on a case-insensitive disk.)
+  PythonCommand:
+    type: framework
+    platform: iOS
+    sources:
+      - path: Python
+        includes: ["pycmd.c"]
+    dependencies:
+      - framework: Frameworks/Python.xcframework
+        embed: false
+      - framework: Frameworks/ios_system.xcframework
+        embed: false
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        MACH_O_TYPE: mh_dylib
+        CLANG_MODULES_AUTOLINK: NO
+        CLANG_ENABLE_MODULES: NO
+        OTHER_LDFLAGS: "-framework Python -framework CoreFoundation"
+        # python3_main is looked up with dlsym.
+        DEAD_CODE_STRIPPING: NO
+        STRIP_STYLE: debugging
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
 targets:
+  pycmd:
+    templates: [PythonCommand]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.ghostty-ios.pycmd
+  pythonA:
+    templates: [PythonCommand]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.ghostty-ios.pythona
+  pythonB:
+    templates: [PythonCommand]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.ghostty-ios.pythonb
+  pythonC:
+    templates: [PythonCommand]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.ghostty-ios.pythonc
+  pythonD:
+    templates: [PythonCommand]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.ghostty-ios.pythond
+  pythonE:
+    templates: [PythonCommand]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.ghostty-ios.pythone
   GhosttyiOS:
     type: application
     platform: iOS
@@ -59,6 +116,30 @@ targets:
           dst="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/terminfo"
           rm -rf "$dst"
           ditto "$SRCROOT/Terminfo" "$dst"
+      # CPython's standard library, without what a terminal doesn't need
+      # (tests, IDLE, tkinter, ensurepip...). PYTHONHOME is <app>/python.
+      # The extension modules (lib-dynload) are loose .so files here, which
+      # the simulator accepts; on a device App Review requires each to be
+      # a framework (see ios/README.md, Python).
+      - name: Bundle the Python standard library
+        basedOnDependencyAnalysis: false
+        script: |
+          xcf="$SRCROOT/Frameworks/Python.xcframework"
+          if [ ! -d "$xcf" ]; then
+            echo "warning: $xcf not found. Run scripts/fetch-python.sh; the local shell won't have python3."
+            exit 0
+          fi
+          if [ "$PLATFORM_NAME" = "iphonesimulator" ]; then slice=ios-arm64_x86_64-simulator; else slice=ios-arm64; fi
+          dst="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/python/lib"
+          rm -rf "$dst"
+          mkdir -p "$dst"
+          ditto "$xcf/lib/python3.14" "$dst/python3.14"
+          ditto "$xcf/$slice/lib-arm64/python3.14" "$dst/python3.14"
+          cd "$dst/python3.14"
+          rm -rf test idlelib tkinter turtledemo ensurepip turtle.py lib2to3 \
+            config-3.14-* __phello__ site-packages/README.txt
+          find . -name __pycache__ -prune -exec rm -rf {} +
+          find . -name "_test*" -o -name "_tkinter*" -o -name "_xxtestfuzz*" -o -name "_ctypes_test*" | xargs rm -rf
       # dash finds commands by looking for executable files on PATH, and
       # ios_system puts <app>/Library/bin on it. The commands themselves are
       # in the frameworks; these empty files only make dash see them (and
@@ -154,6 +235,16 @@ targets:
       # are loaded with dlopen when a command runs, so they're embedded but
       # not linked. Run scripts/fetch-ios-system.sh first.
       - framework: Frameworks/ios_system.xcframework
+      # CPython, run as the `python3` command (six copies, see PythonCommand).
+      # Run scripts/fetch-python.sh first.
+      - framework: Frameworks/Python.xcframework
+        link: false
+      - target: pycmd
+      - target: pythonA
+      - target: pythonB
+      - target: pythonC
+      - target: pythonD
+      - target: pythonE
       - framework: Frameworks/files.xcframework
         link: false
       - framework: Frameworks/text.xcframework
