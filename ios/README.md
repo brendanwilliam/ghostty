@@ -72,8 +72,13 @@ libghostty draws it like any other session.
 embedded, with the standard library trimmed in a build phase and six copies
 of the small `Python/pycmd.c` framework (`pycmd`, `pythonA` to `pythonE`;
 ios_system won't run one framework twice). `python3` and `python` are registered in
-`Resources/Local/localCommands.plist`. Only one runs at a time (the
-interpreter is process-wide); a second says so. Extension modules (`lib-dynload`) are loose
+`Resources/Local/localCommands.plist`. Each run is a
+sub-interpreter of one shared interpreter (started on first use, never
+finalized), so runs in different tabs overlap and start in milliseconds.
+They share the GIL, so CPU-bound programs take turns. Daemon threads are
+refused ("daemon threads are disabled"); ordinary threads are joined at the
+end. Leaks about 50 KB per run. At most six tabs can run a shell at once
+(ios_system's six dash copies). Extension modules (`lib-dynload`) are loose
 `.so` files, fine for the simulator but they must become frameworks before a
 device or App Store build. See `Spikes/Python/README.md`.
 

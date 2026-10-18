@@ -76,4 +76,48 @@ final class LocalPythonTests: XCTestCase {
         try await python.waitFor { $0.contains("finished\r\n") }
         XCTAssertFalse(python.text.contains("KeyboardInterrupt"), python.text.debugDescription)
     }
+
+    /// Runs in different tabs overlap: neither waits for the other.
+    func testTwoTabsRunPythonAtTheSameTime() async throws {
+        let first = try await LocalTestSession(shell: .dash)
+        let second = try await LocalTestSession(shell: .dash)
+        let started = Date()
+        let program = "python3 -c 'import time; time.sleep(1.5); print(\"done-\" + str(7 * 6))'\r"
+        first.backend.write(Data(program.utf8))
+        second.backend.write(Data(program.utf8))
+        try await first.waitFor { $0.contains("done-42\r\n") }
+        try await second.waitFor { $0.contains("done-42\r\n") }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2.8, "ran one after the other")
+    }
+
+    /// Ctrl-C reaches the run in its own tab only.
+    func testControlCStopsOnlyTheTabItWasPressedIn() async throws {
+        let first = try await LocalTestSession(shell: .dash)
+        let second = try await LocalTestSession(shell: .dash)
+        first.backend.write(Data("python3 -c 'while True: pass'\r".utf8))
+        second.backend.write(Data("python3 -c 'import time; time.sleep(2); print(\"second-done\")'\r".utf8))
+        try await first.waitFor { $0.hasSuffix("pass'\r\n") }
+        try await second.waitFor { $0.hasSuffix("print(\"second-done\")'\r\n") }
+        try await Task.sleep(for: .milliseconds(500))
+        first.backend.write(Data("\u{3}".utf8))
+        try await first.waitFor { $0.contains("KeyboardInterrupt") && $0.hasSuffix(" $ ") }
+        try await second.waitFor { $0.contains("second-done\r\n") }
+        XCTAssertFalse(second.text.contains("KeyboardInterrupt"), second.text.debugDescription)
+    }
+
+    /// Each run starts clean: nothing a program set is visible to the next.
+    func testRunsDoNotShareState() async throws {
+        let session = try await LocalTestSession(shell: .dash)
+        try await session.type("python3 -c 'import builtins, sys; builtins.leak = 1; sys.modules[\"leakmod\"] = sys'\r")
+        try await session.type("python3 -c 'import builtins, sys; print(hasattr(builtins, \"leak\"), \"leakmod\" in sys.modules)'\r")
+        XCTAssertTrue(session.text.contains("False False\r\n"), session.text.debugDescription)
+    }
+
+    func testAThreadAProgramStartsIsJoinedAtTheEnd() async throws {
+        let session = try await LocalTestSession(shell: .dash)
+        try await session.type("python3 -c 'import threading, time; threading.Thread(target=lambda: (time.sleep(0.3), print(\"from thread\"))).start()'\r")
+        XCTAssertTrue(session.text.contains("from thread\r\n"), session.text.debugDescription)
+        try await session.type("python3 -c 'print(\"still fine\")'\r")
+        XCTAssertTrue(session.text.contains("still fine\r\n"), session.text.debugDescription)
+    }
 }

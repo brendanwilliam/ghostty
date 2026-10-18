@@ -74,9 +74,10 @@ process as the app, with no fork/exec and no JIT.
 - **REPL.** `python3` with no arguments reads a program from stdin. An
   interactive prompt needs `code.interact` plus line editing from the
   backend; not tried.
-- **Concurrency.** One Python at a time. Two tabs can't both run Python.
-  Fixing it needs sub-interpreters (3.12+), with the extension modules that
-  support them, or a queue with a clear message.
+- **Concurrency.** The spike runs one Python at a time (one interpreter per
+  process, finalized after each run). The app now runs each program in a
+  sub-interpreter (shared GIL, legacy extension modules allowed), so
+  programs overlap; see `ios/Python/pycmd.c` and `ios/README.md`.
 - **Sleep and other C calls aren't interrupted** until they return.
 - **Wire into the app.** Add the six frameworks, `pythonCommands.plist` (via
   `addCommandList`), `PYTHONHOME`-style resources and an `ios/scripts`
