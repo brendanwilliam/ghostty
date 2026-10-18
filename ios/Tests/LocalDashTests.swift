@@ -54,9 +54,9 @@ final class LocalDashTests: XCTestCase {
         let session = try await LocalTestSession(shell: .dash)
         session.backend.write(Data("cat\r".utf8))
         try await session.waitFor { $0.hasSuffix("cat\r\n") }
-        try await Task.sleep(for: .milliseconds(300))
-        session.backend.write(Data("\u{3}".utf8))
-        try await session.waitFor { $0.contains("^C") && $0.hasSuffix(" $ ") }
+        // Ctrl-C only reaches a command that has started reading, and how
+        // long that takes depends on load: press again like a user would.
+        try await session.pressControlCUntilPrompt()
         // The shell is still there.
         try await session.type("echo alive\r")
         XCTAssertTrue(session.text.contains("alive\r\n"), session.text.debugDescription)

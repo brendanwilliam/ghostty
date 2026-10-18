@@ -40,7 +40,7 @@ libghostty draws it like any other session.
 - **Shell:** dash, running as one long-lived command per tab. Variables,
   `cd`, `&&`, loops and scripts work. `~/.dashrc` is read at startup.
 - **Commands:** the BSD file and text tools (`ls`, `cat`, `grep`, `sed`,
-  `awk`, `tar`, `find`, ...), `less`, `vim`, and `lg2` (libgit2's `git`).
+  `awk`, `tar`, `find`, ...), `less`, `vim`, `lg2` (libgit2's `git`) and `python3` (see Python below).
   Commands are compiled into frameworks inside the app; nothing is
   downloaded or run from outside it.
 - **Files:** `$HOME` is the app's Documents folder, so files show up in the
@@ -68,19 +68,36 @@ libghostty draws it like any other session.
   starts (`LocalEnvironment.prepareProcess`). libghostty keeps a pointer to
   `environ` from startup, so nothing may add to it later.
 
-**Python.** `Python.xcframework` (BeeWare's Python-Apple-support) is
-embedded, with the standard library trimmed in a build phase and six copies
-of the small `Python/pycmd.c` framework (`pycmd`, `pythonA` to `pythonE`;
-ios_system won't run one framework twice). `python3` and `python` are registered in
-`Resources/Local/localCommands.plist`. Each run is a
-sub-interpreter of one shared interpreter (started on first use, never
-finalized), so runs in different tabs overlap and start in milliseconds.
-They share the GIL, so CPU-bound programs take turns. Daemon threads are
-refused ("daemon threads are disabled"); ordinary threads are joined at the
-end. Leaks about 50 KB per run. At most six tabs can run a shell at once
-(ios_system's six dash copies). Extension modules (`lib-dynload`) are loose
-`.so` files, fine for the simulator but they must become frameworks before a
-device or App Store build. See `Spikes/Python/README.md`.
+**Python.** `python3` (also `python`) runs CPython 3.14 inside the app:
+`python3 script.py`, `python3 -c '...'`, `python3 -m module`, or a program
+piped to stdin. There is no interactive prompt yet (`python3` alone reads a
+program from stdin).
+
+- **Setup.** `scripts/fetch-python.sh` downloads BeeWare's
+  Python-Apple-support (SHA-256 checked). `Python.xcframework` is embedded,
+  and a build phase copies the standard library into `<app>/python`, without
+  `test`, `idlelib`, `tkinter`, `turtledemo` and `ensurepip` (about 27 MB on
+  the simulator).
+- **The command.** `Python/pycmd.c` is built as six frameworks (`pycmd`,
+  `pythonA` to `pythonE`) because ios_system won't run one framework twice.
+  They're registered in `Resources/Local/localCommands.plist`.
+- **Runs.** One interpreter starts on first use and is never finalized. Each
+  run is a sub-interpreter of it with the shared GIL, so runs in different
+  tabs overlap and start in milliseconds; CPU-bound programs take turns.
+  Ordinary threads are joined when the program ends; daemon threads are
+  refused ("daemon threads are disabled"), because an interpreter that still
+  has one can't be ended. Each run leaks about 50 KB.
+- **Ctrl-C.** Raises KeyboardInterrupt in the run on that tab's thread, so
+  a loop stops at once and other tabs aren't affected. A long `time.sleep`
+  or other C call ends when it returns.
+- **Limits.** No `subprocess` or `fork` (iOS), no `pip`, no GUI modules.
+  At most six tabs can run a shell at once (ios_system's six dash copies).
+- **Before a device or App Store build.** The extension modules
+  (`lib-dynload`, 56 `.so` files) are loose files here, which the simulator
+  accepts. App Review requires each to be a framework; BeeWare's
+  `install_python` converts them. That step isn't wired in yet, and Python's
+  license needs an acknowledgements screen. `Spikes/Python/README.md` has the
+  spike's findings.
 
 **Building dash.** `ios/scripts/build-dash.sh` builds dash and its copies
 (dashA to dashE) from holzschu/dash_iOS at a pinned commit, with the patch,

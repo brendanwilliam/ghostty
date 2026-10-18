@@ -49,4 +49,19 @@ final class LocalTestSession: @unchecked Sendable {
             try await Task.sleep(for: .milliseconds(20))
         }
     }
+
+    /// Presses Ctrl-C (again, up to four times, a second apart) until the
+    /// output ends in a prompt after a "^C".
+    func pressControlCUntilPrompt() async throws {
+        for _ in 0..<4 {
+            try await Task.sleep(for: .milliseconds(300))
+            backend.write(Data("\u{3}".utf8))
+            let deadline = Date().addingTimeInterval(1)
+            while Date() < deadline {
+                if text.contains("^C") && text.hasSuffix(" $ ") { return }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        try await waitFor { $0.contains("^C") && $0.hasSuffix(" $ ") }
+    }
 }

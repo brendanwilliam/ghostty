@@ -120,4 +120,31 @@ final class LocalPythonTests: XCTestCase {
         try await session.type("python3 -c 'print(\"still fine\")'\r")
         XCTAssertTrue(session.text.contains("still fine\r\n"), session.text.debugDescription)
     }
+
+    func testRunsAModuleAndAProgramFromStandardInput() async throws {
+        let session = try await LocalTestSession(shell: .dash)
+        try await session.type("python3 -m json.tool --help | head -1\r")
+        XCTAssertTrue(session.text.contains("usage:"), session.text.debugDescription)
+        try await session.type("echo 'print(2 ** 10)' | python3\r")
+        XCTAssertTrue(session.text.contains("1024\r\n"), session.text.debugDescription)
+        try await session.type("echo '{\"a\": 1}' | python3 -m json.tool\r")
+        XCTAssertTrue(session.text.contains("\"a\": 1"), session.text.debugDescription)
+    }
+
+    /// Every extension module in the bundled standard library has to load
+    /// in a sub-interpreter. A module that doesn't would fail only for the
+    /// programs that use it.
+    func testEveryExtensionModuleImports() async throws {
+        let session = try await LocalTestSession(shell: .dash)
+        let program = """
+            python3 -c 'import importlib, pkgutil, os, sys, _imp; \
+            d = os.path.join(sys.prefix, "lib/python3.14/lib-dynload"); \
+            names = sorted({f.split(".")[0] for f in os.listdir(d)}); \
+            bad = []; \
+            exec("for n in names:\\n try: importlib.import_module(n)\\n except Exception as e: bad.append(n + \\": \\" + repr(e))"); \
+            print("modules", len(names), "failed", len(bad)); print(*bad, sep=chr(10))'\r
+            """
+        try await session.type(program)
+        XCTAssertTrue(session.text.contains("failed 0\r\n"), session.text.debugDescription)
+    }
 }
