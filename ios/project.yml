@@ -240,11 +240,17 @@ targets:
       - framework: Frameworks/Python.xcframework
         link: false
       - target: pycmd
+        link: false
       - target: pythonA
+        link: false
       - target: pythonB
+        link: false
       - target: pythonC
+        link: false
       - target: pythonD
+        link: false
       - target: pythonE
+        link: false
       - framework: Frameworks/files.xcframework
         link: false
       - framework: Frameworks/text.xcframework

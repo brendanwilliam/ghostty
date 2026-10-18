@@ -39,5 +39,19 @@
 		<string></string>
 		<string>directory</string>
 	</array>
+	<key>python3</key>
+	<array>
+		<string>pycmd.framework/pycmd</string>
+		<string>python3_main</string>
+		<string></string>
+		<string>no</string>
+	</array>
+	<key>python</key>
+	<array>
+		<string>pycmd.framework/pycmd</string>
+		<string>python3_main</string>
+		<string></string>
+		<string>no</string>
+	</array>
 </dict>
 </plist>

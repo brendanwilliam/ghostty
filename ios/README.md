@@ -69,8 +69,9 @@ libghostty draws it like any other session.
 **Python.** `Python.xcframework` (BeeWare's Python-Apple-support) is
 embedded, with the standard library trimmed in a build phase and six copies
 of the small `Python/pycmd.c` framework (`pycmd`, `pythonA` to `pythonE`;
-ios_system won't run one framework twice). The `python3` command itself is
-not registered in the shell yet. Extension modules (`lib-dynload`) are loose
+ios_system won't run one framework twice). `python3` and `python` are registered in
+`Resources/Local/localCommands.plist`. Only one runs at a time (the
+interpreter is process-wide); a second says so. Extension modules (`lib-dynload`) are loose
 `.so` files, fine for the simulator but they must become frameworks before a
 device or App Store build. See `Spikes/Python/README.md`.
 

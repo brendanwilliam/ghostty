@@ -52,6 +52,9 @@ final class LocalBackend: TerminalBackend, @unchecked Sendable {
     /// Where a running command's input goes: its stdin, and the "tty"
     /// that pagers like `less` read keys from.
     private var stdinWriter: FileHandle?
+    /// The dash shell is running (between its start and its return).
+    private var shellRunning = false
+    private var countedAsExiting = false
     private var ttyWriter: FileHandle?
 
     /// All output (commands, echo, prompt) goes through one pipe, so it
@@ -91,7 +94,13 @@ final class LocalBackend: TerminalBackend, @unchecked Sendable {
             ios_setDirectoryURL(LocalEnvironment.home)
             switch shell {
             case .dash:
+                LocalBackend.waitForShellsToFinishExiting()
+                lock.withLock { shellRunning = true }
                 execute("dash")
+                LocalBackend.shellDidExit(counted: lock.withLock {
+                    shellRunning = false
+                    return countedAsExiting
+                })
                 // The shell exited: the tab is done.
                 close()
             case .builtin:
@@ -131,6 +140,12 @@ final class LocalBackend: TerminalBackend, @unchecked Sendable {
         }
         guard !wasClosed else { return }
         if shell == .dash {
+            let startedExit = lock.withLock { () -> Bool in
+                guard shellRunning, !countedAsExiting else { return false }
+                countedAsExiting = true
+                return true
+            }
+            if startedExit { LocalBackend.shellWillExit() }
             // End of input is how a shell is meant to be left; it also
             // avoids `ios_kill` running dash's own signal handler off its
             // thread. A child command or a loop still has to be stopped.
@@ -139,7 +154,11 @@ final class LocalBackend: TerminalBackend, @unchecked Sendable {
                 return stdinWriter
             }
             try? writer?.close()
-            if lock.withLock({ running }) { killCommand(innermostOnly: true) }
+            // No thread is cancelled here: the id of the last command's
+            // thread may be stale (the command finished), and a stale id can
+            // belong to another tab's shell by now. A child command sees the
+            // end of input too; a busy dash loop gets the interrupt flag.
+            if lock.withLock({ running }) { killCommand(innermostOnly: true, cancelChild: false) }
         } else if lock.withLock({ running }) {
             killCommand()
         }
@@ -255,7 +274,7 @@ final class LocalBackend: TerminalBackend, @unchecked Sendable {
     /// - Handlers built for ios_system end with `exit`, which is
     ///   `pthread_exit`, so this runs on a thread of its own, never one the
     ///   app needs (libghostty's IO thread calls `write`).
-    private func killCommand(innermostOnly: Bool = false) {
+    private func killCommand(innermostOnly: Bool = false, cancelChild: Bool = true) {
         let session = sessionID
         let root = lock.withLock { commandPid }
         Thread.detachNewThread {
@@ -267,7 +286,7 @@ final class LocalBackend: TerminalBackend, @unchecked Sendable {
                 }
                 // Cancel the innermost command, not the shell running it.
                 if let last = ios_getLastThreadId(), last != ios_getThreadId(root) {
-                    pthread_cancel(last)
+                    if cancelChild { pthread_cancel(last) }
                 } else if let shell = ios_getThreadId(root) {
                     // No child: dash itself is busy, in a loop.
                     LocalBackend.requestDashInterrupt(on: shell)
@@ -432,6 +451,42 @@ final class LocalBackend: TerminalBackend, @unchecked Sendable {
     }
 
     private static let forkLock = NSLock()
+
+    // MARK: Shell start and exit
+    //
+    // ios_system runs dash from a framework it loads on demand and unloads
+    // after the shell returns. A shell started while another is still
+    // returning can be handed the same, not yet unloaded image, and dash
+    // loops forever in `init` because its globals aren't fresh. So a new
+    // shell waits for exiting ones, plus a moment for the unload.
+
+    private static let exitGate = NSCondition()
+    private static var shellsExiting = 0
+    private static var lastShellExit = Date.distantPast
+    private static let unloadSettle: TimeInterval = 0.3
+
+    private static func shellWillExit() {
+        exitGate.withLock { shellsExiting += 1 }
+    }
+
+    private static func shellDidExit(counted: Bool) {
+        exitGate.withLock {
+            if counted { shellsExiting -= 1 }
+            lastShellExit = Date()
+            exitGate.broadcast()
+        }
+    }
+
+    private static func waitForShellsToFinishExiting() {
+        let deadline = Date().addingTimeInterval(5)
+        exitGate.lock()
+        defer { exitGate.unlock() }
+        while Date() < deadline {
+            let settled = lastShellExit.addingTimeInterval(unloadSettle)
+            if shellsExiting == 0 && Date() >= settled { return }
+            exitGate.wait(until: shellsExiting == 0 ? settled : deadline)
+        }
+    }
 
     // ios_system calls the app's interactive hooks with no argument; the
     // session's context (our sessionID) says which backend they're for.
