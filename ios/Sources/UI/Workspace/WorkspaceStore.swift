@@ -15,10 +15,10 @@ final class WorkspaceStore: ObservableObject {
     private var hostSessions: [UUID: HostSessions] = [:]
     private let archive: WorkspaceArchive
     /// Makes workspaces. Tests replace this to avoid SSH.
-    private let make: @MainActor (Host, WorkspaceLayout?, HostSessions) -> TerminalWorkspace
+    private let make: @MainActor (Host, WorkspaceLayout?, HostSessions?) -> TerminalWorkspace
 
     init(archive: WorkspaceArchive? = nil,
-         make: (@MainActor (Host, WorkspaceLayout?, HostSessions) -> TerminalWorkspace)? = nil) {
+         make: (@MainActor (Host, WorkspaceLayout?, HostSessions?) -> TerminalWorkspace)? = nil) {
         self.archive = archive ?? WorkspaceArchive()
         self.make = make ?? { TerminalWorkspace(host: $0, layout: $1, sessions: $2) }
     }
@@ -27,7 +27,11 @@ final class WorkspaceStore: ObservableObject {
     /// or a new one.
     func workspace(for host: Host) -> TerminalWorkspace {
         if let existing = workspaces[host.id], !existing.closed { return existing }
-        let workspace = make(host, archive.layout(for: host.id), sessions(for: host))
+        // The on-device shell has no zmx sessions to keep, so it has no
+        // saved layout either: it starts fresh with the app.
+        let workspace = host.isLocal
+            ? make(host, nil, nil)
+            : make(host, archive.layout(for: host.id), sessions(for: host))
         workspaces[host.id] = workspace
         // Asked for while building the terminal screen, so announce the
         // change (to the host list) after this view update.

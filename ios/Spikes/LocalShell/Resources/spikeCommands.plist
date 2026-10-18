@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Commands ios_system's own dictionary doesn't list. Entries match
+     a-Shell's Resources/commandDictionary.plist. -->
+<plist version="1.0">
+<dict>
+	<key>less</key>
+	<array>
+		<string>files.framework/files</string>
+		<string>less_main</string>
+		<string></string>
+		<string>no</string>
+	</array>
+	<key>more</key>
+	<array>
+		<string>files.framework/files</string>
+		<string>less_main</string>
+		<string></string>
+		<string>no</string>
+	</array>
+	<key>dash</key>
+	<array>
+		<string>dash.framework/dash</string>
+		<string>main</string>
+		<string>efIimnsxvVECabu</string>
+		<string>no</string>
+	</array>
+	<key>vim</key>
+	<array>
+		<string>vim.framework/vim</string>
+		<string>main</string>
+		<string></string>
+		<string></string>
+	</array>
+	<key>lg2</key>
+	<array>
+		<string>lg2.framework/lg2</string>
+		<string>main</string>
+		<string></string>
+		<string>directory</string>
+	</array>
+</dict>
+</plist>

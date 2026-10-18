@@ -22,6 +22,10 @@ final class GhosttyRuntime {
     private let surfaces = NSHashTable<TerminalSurfaceView>.weakObjects()
 
     private init() {
+        // ios_system's setup adds to the process environment, which has to
+        // be done before libghostty takes its snapshot of it.
+        LocalEnvironment.prepareProcess()
+
         // Bundled themes live in <bundle>/GhosttyResources/themes; libghostty
         // finds them through its resources directory.
         if let resources = ConfigPaths.resources {

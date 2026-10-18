@@ -1,0 +1,6 @@
+// Signing comes from the app's Local.xcconfig (team ID), if present.
+GHOSTTY_IOS_BUNDLE_ID = com.example.ghostty-ios
+CODE_SIGN_STYLE = Automatic
+#include? "../../Config/Local.xcconfig"
+PRODUCT_BUNDLE_IDENTIFIER = $(GHOSTTY_IOS_BUNDLE_ID).localshell-spike
+PRODUCT_NAME = LocalShellSpike

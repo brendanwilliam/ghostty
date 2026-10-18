@@ -29,6 +29,10 @@ struct SettingsView: View {
                 }
 
                 hostsSection
+
+                Section {
+                    NavigationLink("Acknowledgements") { AcknowledgementsView() }
+                }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

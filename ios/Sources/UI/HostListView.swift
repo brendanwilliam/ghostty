@@ -13,6 +13,25 @@ struct HostListView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    NavigationLink(value: Host.local) {
+                        VStack(alignment: .leading) {
+                            Text(Host.local.displayName).font(.headline)
+                            Text("A shell on this phone. Works without a network.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if let open = workspaces.openWorkspace(for: .local) {
+                                OpenSessionsLabel(workspace: open)
+                            }
+                        }
+                    }
+                    .swipeActions {
+                        if workspaces.hasSessions(.local) {
+                            Button("End Sessions") { ending = .local }.tint(.orange)
+                        }
+                    }
+                }
+
                 Section("Hosts") {
                     if store.hosts.isEmpty {
                         Text("Add your Mac to connect. Enable Remote Login in System Settings → General → Sharing.")
@@ -98,8 +117,10 @@ struct HostListView: View {
                 presenting: ending
             ) { host in
                 Button("End Sessions", role: .destructive) { workspaces.endSessions(host) }
-            } message: { _ in
-                Text("Closes every tab and ends the programs running in them on the host.")
+            } message: { host in
+                Text(host.isLocal
+                     ? "Closes every tab and stops the programs running in them."
+                     : "Closes every tab and ends the programs running in them on the host.")
             }
             .onAppear { bonjour.start() }
             .onDisappear { bonjour.stop() }

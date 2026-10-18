@@ -24,7 +24,64 @@ packages:
   swift-nio-transport-services:
     url: https://github.com/apple/swift-nio-transport-services.git
     from: 1.28.0
+targetTemplates:
+  # `python3` as an ios_system command (Python/pycmd.c). ios_system won't
+  # run one framework twice, so there are six copies from the same source:
+  # pycmd, and pythonA...pythonE, named after the command. (Not `python`:
+  # it would clash with Python.framework on a case-insensitive disk.)
+  PythonCommand:
+    type: framework
+    platform: iOS
+    sources:
+      - path: Python
+        includes: ["pycmd.c"]
+    dependencies:
+      - framework: Frameworks/Python.xcframework
+        embed: false
+      - framework: Frameworks/ios_system.xcframework
+        embed: false
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        MACH_O_TYPE: mh_dylib
+        CLANG_MODULES_AUTOLINK: NO
+        CLANG_ENABLE_MODULES: NO
+        OTHER_LDFLAGS: "-framework Python -framework CoreFoundation"
+        # python3_main is looked up with dlsym.
+        DEAD_CODE_STRIPPING: NO
+        STRIP_STYLE: debugging
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
 targets:
+  pycmd:
+    templates: [PythonCommand]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.ghostty-ios.pycmd
+  pythonA:
+    templates: [PythonCommand]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.ghostty-ios.pythona
+  pythonB:
+    templates: [PythonCommand]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.ghostty-ios.pythonb
+  pythonC:
+    templates: [PythonCommand]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.ghostty-ios.pythonc
+  pythonD:
+    templates: [PythonCommand]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.ghostty-ios.pythond
+  pythonE:
+    templates: [PythonCommand]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.ghostty-ios.pythone
   GhosttyiOS:
     type: application
     platform: iOS
@@ -51,6 +108,133 @@ targets:
           rm -rf "$dst"
           mkdir -p "$(dirname "$dst")"
           ditto "$src" "$dst"
+      # Terminal definitions for the local shell (TERMINFO points here),
+      # compiled with tic from xterm-256color and Ghostty's own entry.
+      - name: Copy terminfo
+        basedOnDependencyAnalysis: false
+        script: |
+          dst="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/terminfo"
+          rm -rf "$dst"
+          ditto "$SRCROOT/Terminfo" "$dst"
+      # CPython's standard library, without what a terminal doesn't need
+      # (tests, IDLE, tkinter, ensurepip...). PYTHONHOME is <app>/python.
+      # App Review rejects loose .so files, so each extension module
+      # (lib-dynload) becomes its own framework in <app>/Frameworks, and a
+      # <module>.fwork file where the .so was tells Python's importer where
+      # the framework is. This is the layout BeeWare's install_python makes.
+      - name: Bundle the Python standard library
+        basedOnDependencyAnalysis: false
+        script: |
+          xcf="$SRCROOT/Frameworks/Python.xcframework"
+          if [ ! -d "$xcf" ]; then
+            echo "warning: $xcf not found. Run scripts/fetch-python.sh; the local shell won't have python3."
+            exit 0
+          fi
+          if [ "$PLATFORM_NAME" = "iphonesimulator" ]; then
+            slice=ios-arm64_x86_64-simulator
+            platform=iPhoneSimulator
+          else
+            slice=ios-arm64
+            platform=iPhoneOS
+          fi
+          dst="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/python/lib"
+          rm -rf "$dst"
+          mkdir -p "$dst"
+          ditto "$xcf/lib/python3.14" "$dst/python3.14"
+          ditto "$xcf/$slice/lib-arm64/python3.14" "$dst/python3.14"
+          cd "$dst/python3.14"
+          rm -rf test idlelib tkinter turtledemo ensurepip turtle.py lib2to3 \
+            config-3.14-* __phello__ site-packages/README.txt
+          find . -name __pycache__ -prune -exec rm -rf {} +
+          find . -name "_test*" -o -name "_tkinter*" -o -name "_xxtestfuzz*" -o -name "_ctypes_test*" | xargs rm -rf
+
+          frameworks="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH"
+          mkdir -p "$frameworks"
+          for so in lib-dynload/*.so; do
+            file=$(basename "$so")
+            name=${file%%.*}
+            fw="$frameworks/$name.framework"
+            rm -rf "$fw"
+            mkdir -p "$fw"
+            mv "$so" "$fw/$name"
+            install_name_tool -id "@rpath/$name.framework/$name" "$fw/$name"
+            cp "$xcf/build/iOS-dylib-Info-template.plist" "$fw/Info.plist"
+            plutil -replace CFBundleExecutable -string "$name" "$fw/Info.plist"
+            plutil -replace CFBundleIdentifier -string "$(echo "$PRODUCT_BUNDLE_IDENTIFIER.$name" | tr _ -)" "$fw/Info.plist"
+            plutil -replace CFBundleSupportedPlatforms -json "[\"$platform\"]" "$fw/Info.plist"
+            # Where Python finds it: the placeholder, and a way back.
+            echo "Frameworks/$name.framework/$name" > "lib-dynload/${file%.so}.fwork"
+            echo "python/lib/python3.14/lib-dynload/${file%.so}.fwork" > "$fw/$name.origin"
+            if [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
+              codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --timestamp=none "$fw"
+            fi
+          done
+      # dash finds commands by looking for executable files on PATH, and
+      # ios_system puts <app>/Library/bin on it. The commands themselves are
+      # in the frameworks; these empty files only make dash see them (and
+      # ios_execv then runs the command by name).
+      - name: Create local shell command stubs
+        basedOnDependencyAnalysis: false
+        script: |
+          bin="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Library/bin"
+          rm -rf "$bin"
+          mkdir -p "$bin"
+          for plist in commandDictionary extraCommandsDictionary localCommands; do
+            plutil -convert json -o - "$SRCROOT/Resources/Local/$plist.plist" \
+              | /usr/bin/python3 -I -c 'import json, sys; print("\n".join(json.load(sys.stdin)))' \
+              | while read -r name; do
+                  : > "$bin/$name"
+                  chmod +x "$bin/$name"
+                done
+          done
+      # dash (and its copies for overlapping runs), vim and lg2 ship only
+      # device slices, so they're embedded here with the frameworks they
+      # load. On a simulator, scripts/make-sim-frameworks.sh makes
+      # simulator builds of them; without those the local shell falls back
+      # to its built-in prompt.
+      - name: Embed local shell frameworks
+        basedOnDependencyAnalysis: false
+        script: |
+          dst="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH"
+          mkdir -p "$dst"
+          sign() {
+            if [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
+              codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --preserve-metadata=identifier,entitlements "$dst/$1.framework"
+            fi
+          }
+          if [ "$PLATFORM_NAME" = "iphonesimulator" ]; then
+            # dash is built here with an arm64 simulator slice. vim and lg2
+            # only ship device builds, which scripts/make-sim-frameworks.sh
+            # re-tags into Frameworks-sim/.
+            for name in vim lg2; do
+              if [ ! -d "$SRCROOT/Frameworks-sim/$name.framework" ]; then
+                echo "note: run scripts/make-sim-frameworks.sh to run $name on the simulator."
+                continue
+              fi
+              rm -rf "$dst/$name.framework"
+              ditto "$SRCROOT/Frameworks-sim/$name.framework" "$dst/$name.framework"
+            done
+            slices='^ios-arm64(_arm64e)?-simulator$|^ios-.*simulator$'
+            deps="dash dashA dashB dashC dashD dashE lua_ios libssh2 openssl"
+          else
+            slices='^ios-arm64(_arm64e)?$'
+            deps="dash dashA dashB dashC dashD dashE vim lua_ios lg2 libssh2 openssl"
+          fi
+          for name in $deps; do
+            xcf="$SRCROOT/Frameworks/$name.xcframework"
+            if [ ! -d "$xcf" ]; then
+              echo "warning: $xcf not found. Run scripts/fetch-ios-system.sh; the local terminal won't have $name."
+              continue
+            fi
+            slice=$(ls "$xcf" | grep -E "$slices" | head -1)
+            if [ "$PLATFORM_NAME" = "iphonesimulator" ] && ! lipo -archs "$xcf/$slice/$name.framework/$name" | grep -qw arm64; then
+              echo "note: $name has no arm64 simulator slice; run scripts/build-dash.sh (dash) or make-sim-frameworks.sh."
+              continue
+            fi
+            rm -rf "$dst/$name.framework"
+            ditto "$xcf/$slice/$name.framework" "$dst/$name.framework"
+            sign "$name"
+          done
     configFiles:
       Debug: Config/Base.xcconfig
       Release: Config/Base.xcconfig
@@ -76,6 +260,36 @@ targets:
         product: NIOCore
       - package: swift-nio-transport-services
         product: NIOTransportServices
+      # ios_system runs the offline local shell. Its command frameworks
+      # are loaded with dlopen when a command runs, so they're embedded but
+      # not linked. Run scripts/fetch-ios-system.sh first.
+      - framework: Frameworks/ios_system.xcframework
+      # CPython, run as the `python3` command (six copies, see PythonCommand).
+      # Run scripts/fetch-python.sh first.
+      - framework: Frameworks/Python.xcframework
+        link: false
+      - target: pycmd
+        link: false
+      - target: pythonA
+        link: false
+      - target: pythonB
+        link: false
+      - target: pythonC
+        link: false
+      - target: pythonD
+        link: false
+      - target: pythonE
+        link: false
+      - framework: Frameworks/files.xcframework
+        link: false
+      - framework: Frameworks/text.xcframework
+        link: false
+      - framework: Frameworks/shell.xcframework
+        link: false
+      - framework: Frameworks/awk.xcframework
+        link: false
+      - framework: Frameworks/tar.xcframework
+        link: false
       - sdk: Metal.framework
       - sdk: QuartzCore.framework
       - sdk: CoreText.framework

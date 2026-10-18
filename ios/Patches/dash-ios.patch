@@ -1,0 +1,107 @@
+diff --git a/src/main.c b/src/main.c
+index 325e292..4f50be5 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -98,6 +98,9 @@ main(int argc, char **argv)
+ 	struct stackmark smark;
+ 	int login;
+ 
++	/* A request aimed at an earlier shell must not stop this one. */
++	dash_clear_interrupt();
++
+ #ifdef __GLIBC__
+ 	dash_errno = __errno_location();
+ #endif
+diff --git a/src/shell.h b/src/shell.h
+index 6e06337..70fc590 100644
+--- a/src/shell.h
++++ b/src/shell.h
+@@ -104,3 +104,13 @@ static inline int max_int_length(int bytes)
+ }
+ 
+ #include <TargetConditionals.h>
++
++/* strchrnul only exists from iOS 18.4; the app runs on older systems. */
++#include <string.h>
++static inline char *dash_strchrnul(const char *s, int c)
++{
++	while (*s && *s != (char)c)
++		s++;
++	return (char *)s;
++}
++#define strchrnul dash_strchrnul
+diff --git a/src/trap.c b/src/trap.c
+index 8b72674..7ba1e29 100644
+--- a/src/trap.c
++++ b/src/trap.c
+@@ -33,6 +33,8 @@
+  */
+ 
+ #include <signal.h>
++#include <pthread.h>
++#include <time.h>
+ #include <unistd.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -314,6 +316,29 @@ onsig(int signo)
+  * handlers while we are executing a trap handler.
+  */
+ 
++/*
++ * Cooperative interrupt for iOS, where no signal reaches this thread.
++ * The host app calls dash_request_interrupt() with the thread running the
++ * shell; the shell, which polls here between commands, raises the same
++ * interrupt a ^C would. Each copy of dash (dash, dashA...) has its own
++ * target, so only the shell on that thread is interrupted.
++ */
++static volatile pthread_t ios_interrupt_target;
++static volatile sig_atomic_t ios_interrupt_set;
++static volatile time_t ios_interrupt_time;
++
++void dash_request_interrupt(pthread_t target)
++{
++	ios_interrupt_target = target;
++	ios_interrupt_time = time(NULL);
++	ios_interrupt_set = 1;
++}
++
++void dash_clear_interrupt(void)
++{
++	ios_interrupt_set = 0;
++}
++
+ void dotrap(void)
+ {
+ 	char *p;
+@@ -321,6 +346,19 @@ void dotrap(void)
+ 	int i;
+ 	int status, last_status;
+ 
++	if (ios_interrupt_set) {
++		/*
++		 * Thread ids get reused, so a request that was aimed at
++		 * another shell and never consumed expires.
++		 */
++		if (time(NULL) - ios_interrupt_time > 2)
++			ios_interrupt_set = 0;
++		else if (pthread_equal(ios_interrupt_target, pthread_self())) {
++			ios_interrupt_set = 0;
++			onint();
++		}
++	}
++
+ 	if (!pending_sig)
+ 		return;
+ 
+diff --git a/src/trap.h b/src/trap.h
+index beaf660..d9520d5 100644
+--- a/src/trap.h
++++ b/src/trap.h
+@@ -39,6 +39,7 @@
+ extern int trapcnt;
+ extern char sigmode[];
+ extern volatile sig_atomic_t pending_sig;
++void dash_clear_interrupt(void);
+ extern volatile sig_atomic_t gotsigchld;
+ 
+ int trapcmd(int, char **);

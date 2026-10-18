@@ -1,0 +1,193 @@
+# Throwaway spike: CPython as an ios_system command.
+# Run ./fetch-python.sh (and ../../scripts/fetch-ios-system.sh), then `xcodegen generate`.
+name: PythonSpike
+options:
+  minimumXcodeGenVersion: 2.38.0
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  pycmd:
+    type: framework
+    platform: iOS
+    sources:
+      - Sources/pycmd
+    dependencies:
+      - framework: Frameworks/Python.xcframework
+        embed: false
+      - framework: ../../Frameworks/ios_system.xcframework
+        embed: false
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.pycmd
+        MACH_O_TYPE: mh_dylib
+        CLANG_MODULES_AUTOLINK: NO
+        CLANG_ENABLE_MODULES: NO
+        OTHER_LDFLAGS: "-framework Python -framework CoreFoundation"
+        # python3_main is looked up with dlsym.
+        DEAD_CODE_STRIPPING: NO
+        STRIP_STYLE: debugging
+  pythonA:
+    type: framework
+    platform: iOS
+    sources:
+      - Sources/pycmd
+    dependencies:
+      - framework: Frameworks/Python.xcframework
+        embed: false
+      - framework: ../../Frameworks/ios_system.xcframework
+        embed: false
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.pythona
+        MACH_O_TYPE: mh_dylib
+        CLANG_MODULES_AUTOLINK: NO
+        CLANG_ENABLE_MODULES: NO
+        OTHER_LDFLAGS: "-framework Python -framework CoreFoundation"
+        # python3_main is looked up with dlsym.
+        DEAD_CODE_STRIPPING: NO
+        STRIP_STYLE: debugging
+  pythonB:
+    type: framework
+    platform: iOS
+    sources:
+      - Sources/pycmd
+    dependencies:
+      - framework: Frameworks/Python.xcframework
+        embed: false
+      - framework: ../../Frameworks/ios_system.xcframework
+        embed: false
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.pythonb
+        MACH_O_TYPE: mh_dylib
+        CLANG_MODULES_AUTOLINK: NO
+        CLANG_ENABLE_MODULES: NO
+        OTHER_LDFLAGS: "-framework Python -framework CoreFoundation"
+        # python3_main is looked up with dlsym.
+        DEAD_CODE_STRIPPING: NO
+        STRIP_STYLE: debugging
+  pythonC:
+    type: framework
+    platform: iOS
+    sources:
+      - Sources/pycmd
+    dependencies:
+      - framework: Frameworks/Python.xcframework
+        embed: false
+      - framework: ../../Frameworks/ios_system.xcframework
+        embed: false
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.pythonc
+        MACH_O_TYPE: mh_dylib
+        CLANG_MODULES_AUTOLINK: NO
+        CLANG_ENABLE_MODULES: NO
+        OTHER_LDFLAGS: "-framework Python -framework CoreFoundation"
+        # python3_main is looked up with dlsym.
+        DEAD_CODE_STRIPPING: NO
+        STRIP_STYLE: debugging
+  pythonD:
+    type: framework
+    platform: iOS
+    sources:
+      - Sources/pycmd
+    dependencies:
+      - framework: Frameworks/Python.xcframework
+        embed: false
+      - framework: ../../Frameworks/ios_system.xcframework
+        embed: false
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.pythond
+        MACH_O_TYPE: mh_dylib
+        CLANG_MODULES_AUTOLINK: NO
+        CLANG_ENABLE_MODULES: NO
+        OTHER_LDFLAGS: "-framework Python -framework CoreFoundation"
+        # python3_main is looked up with dlsym.
+        DEAD_CODE_STRIPPING: NO
+        STRIP_STYLE: debugging
+  pythonE:
+    type: framework
+    platform: iOS
+    sources:
+      - Sources/pycmd
+    dependencies:
+      - framework: Frameworks/Python.xcframework
+        embed: false
+      - framework: ../../Frameworks/ios_system.xcframework
+        embed: false
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.pythone
+        MACH_O_TYPE: mh_dylib
+        CLANG_MODULES_AUTOLINK: NO
+        CLANG_ENABLE_MODULES: NO
+        OTHER_LDFLAGS: "-framework Python -framework CoreFoundation"
+        # python3_main is looked up with dlsym.
+        DEAD_CODE_STRIPPING: NO
+        STRIP_STYLE: debugging
+  PythonSpike:
+    type: application
+    platform: iOS
+    sources:
+      - Sources/App
+      - path: Resources
+        buildPhase: resources
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.pythonspike
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+    dependencies:
+      - target: pycmd
+      - target: pythonA
+      - target: pythonB
+      - target: pythonC
+      - target: pythonD
+      - target: pythonE
+      - framework: Frameworks/Python.xcframework
+      - framework: ../../Frameworks/ios_system.xcframework
+      - framework: ../../Frameworks/files.xcframework
+        link: false
+      - framework: ../../Frameworks/text.xcframework
+        link: false
+      - framework: ../../Frameworks/shell.xcframework
+        link: false
+    postCompileScripts:
+      - name: Bundle the Python standard library
+        basedOnDependencyAnalysis: false
+        script: |
+          xcf="$SRCROOT/Frameworks/Python.xcframework"
+          if [ "$PLATFORM_NAME" = "iphonesimulator" ]; then slice=ios-arm64_x86_64-simulator; lib=lib-arm64; else slice=ios-arm64; lib=lib-arm64; fi
+          dst="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/python/lib"
+          rm -rf "$dst"; mkdir -p "$dst"
+          ditto "$xcf/lib/python3.14" "$dst/python3.14"
+          ditto "$xcf/$slice/$lib/python3.14" "$dst/python3.14"
+  PythonSpikeTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests
+    dependencies:
+      - target: PythonSpike
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.pythonspike.tests
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/PythonSpike.app/PythonSpike
+        BUNDLE_LOADER: $(TEST_HOST)
+schemes:
+  PythonSpike:
+    build:
+      targets:
+        PythonSpike: all
+        PythonSpikeTests: [test]
+    test:
+      targets: [PythonSpikeTests]

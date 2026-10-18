@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>python3</key>
+	<array>
+		<string>pycmd.framework/pycmd</string>
+		<string>python3_main</string>
+		<string></string>
+		<string>no</string>
+	</array>
+	<key>python</key>
+	<array>
+		<string>pycmd.framework/pycmd</string>
+		<string>python3_main</string>
+		<string></string>
+		<string>no</string>
+	</array>
+</dict>
+</plist>
