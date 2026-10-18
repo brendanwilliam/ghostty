@@ -1,3 +1,5 @@
 Config/Local.xcconfig
 GhosttyiOS.xcodeproj/
 build/
+Frameworks/
+Frameworks-sim/

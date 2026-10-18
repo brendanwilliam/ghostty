@@ -51,6 +51,65 @@ targets:
           rm -rf "$dst"
           mkdir -p "$(dirname "$dst")"
           ditto "$src" "$dst"
+      # dash finds commands by looking for executable files on PATH, and
+      # ios_system puts <app>/Library/bin on it. The commands themselves are
+      # in the frameworks; these empty files only make dash see them (and
+      # ios_execv then runs the command by name).
+      - name: Create local shell command stubs
+        basedOnDependencyAnalysis: false
+        script: |
+          bin="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Library/bin"
+          rm -rf "$bin"
+          mkdir -p "$bin"
+          for plist in commandDictionary extraCommandsDictionary localCommands; do
+            plutil -convert json -o - "$SRCROOT/Resources/Local/$plist.plist" \
+              | /usr/bin/python3 -I -c 'import json, sys; print("\n".join(json.load(sys.stdin)))' \
+              | while read -r name; do
+                  : > "$bin/$name"
+                  chmod +x "$bin/$name"
+                done
+          done
+      # dash (and its copies for overlapping runs), vim and lg2 ship only
+      # device slices, so they're embedded here with the frameworks they
+      # load. On a simulator, scripts/make-sim-frameworks.sh makes
+      # simulator builds of them; without those the local shell falls back
+      # to its built-in prompt.
+      - name: Embed local shell frameworks
+        basedOnDependencyAnalysis: false
+        script: |
+          dst="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH"
+          mkdir -p "$dst"
+          sign() {
+            if [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
+              codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --preserve-metadata=identifier,entitlements "$dst/$1.framework"
+            fi
+          }
+          if [ "$PLATFORM_NAME" = "iphonesimulator" ]; then
+            if [ ! -d "$SRCROOT/Frameworks-sim" ]; then
+              echo "note: run scripts/make-sim-frameworks.sh to run dash on the simulator; the local terminal uses its built-in prompt without it."
+              exit 0
+            fi
+            for name in dash dashA dashB dashC dashD dashE vim lg2; do
+              rm -rf "$dst/$name.framework"
+              ditto "$SRCROOT/Frameworks-sim/$name.framework" "$dst/$name.framework"
+            done
+            slices='^ios-.*simulator$'
+            deps="lua_ios libssh2 openssl"
+          else
+            slices='^ios-arm64(_arm64e)?$'
+            deps="dash dashA dashB dashC dashD dashE vim lua_ios lg2 libssh2 openssl"
+          fi
+          for name in $deps; do
+            xcf="$SRCROOT/Frameworks/$name.xcframework"
+            if [ ! -d "$xcf" ]; then
+              echo "warning: $xcf not found. Run scripts/fetch-ios-system.sh; the local terminal won't have $name."
+              continue
+            fi
+            slice=$(ls "$xcf" | grep -E "$slices" | head -1)
+            rm -rf "$dst/$name.framework"
+            ditto "$xcf/$slice/$name.framework" "$dst/$name.framework"
+            sign "$name"
+          done
     configFiles:
       Debug: Config/Base.xcconfig
       Release: Config/Base.xcconfig
@@ -76,6 +135,20 @@ targets:
         product: NIOCore
       - package: swift-nio-transport-services
         product: NIOTransportServices
+      # ios_system runs the offline local shell. Its command frameworks
+      # are loaded with dlopen when a command runs, so they're embedded but
+      # not linked. Run scripts/fetch-ios-system.sh first.
+      - framework: Frameworks/ios_system.xcframework
+      - framework: Frameworks/files.xcframework
+        link: false
+      - framework: Frameworks/text.xcframework
+        link: false
+      - framework: Frameworks/shell.xcframework
+        link: false
+      - framework: Frameworks/awk.xcframework
+        link: false
+      - framework: Frameworks/tar.xcframework
+        link: false
       - sdk: Metal.framework
       - sdk: QuartzCore.framework
       - sdk: CoreText.framework

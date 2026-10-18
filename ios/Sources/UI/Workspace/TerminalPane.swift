@@ -108,6 +108,15 @@ final class TerminalPane: ObservableObject, Identifiable {
             return nil
         }
 
+        // The on-device shell: no connection, remote config or zmx.
+        if host.isLocal {
+            let backend = LocalBackend()
+            let view = TerminalSurfaceView(app: app, backend: backend, remoteConfig: nil)
+            view.onTitleChange = { [weak self] in self?.title = $0 }
+            configureSurface?(view)
+            return (view, BackendLink(backend: backend))
+        }
+
         // Start from the host's config as last fetched so the first frame
         // looks right; it's refreshed before the shell opens.
         let cache = RemoteConfigCache(hostID: host.id)

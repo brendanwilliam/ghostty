@@ -140,6 +140,17 @@ struct HostRoute: Codable, Hashable {
 }
 
 extension Host {
+    /// This iPhone's own shell (see `LocalBackend`). It has no address and
+    /// isn't saved with the hosts.
+    static let local = Host(
+        id: UUID(uuidString: "00000000-0000-4000-8000-4C4F43414C00")!,
+        name: "This iPhone", hostname: "", username: "")
+
+    /// Whether this is the on-device shell rather than an SSH host.
+    var isLocal: Bool { id == Host.local.id }
+}
+
+extension Host {
     // Decoded by hand so hosts saved by older versions (without the
     // newer fields) still load.
     private enum CodingKeys: String, CodingKey {
