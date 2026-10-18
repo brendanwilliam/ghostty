@@ -244,6 +244,23 @@ final class LocalBackend: TerminalBackend, @unchecked Sendable {
         killCommand(innermostOnly: shell == .dash)
     }
 
+    /// Raises KeyboardInterrupt in the Python running on `thread`, if that's
+    /// what the thread is. The six copies of the command framework share one
+    /// interpreter, so any loaded copy will do.
+    private static func requestPythonInterrupt(on thread: pthread_t) -> Bool {
+        guard let frameworks = Bundle.main.privateFrameworksURL else { return false }
+        for name in ["pycmd", "pythonA", "pythonB", "pythonC", "pythonD", "pythonE"] {
+            let path = frameworks.appendingPathComponent("\(name).framework/\(name)").path
+            // Balanced dlopen/dlclose: see requestDashInterrupt.
+            guard let handle = dlopen(path, RTLD_NOLOAD) else { continue }
+            defer { dlclose(handle) }
+            guard let symbol = dlsym(handle, "python3_interrupt") else { continue }
+            typealias Request = @convention(c) (UInt) -> Int32
+            return unsafeBitCast(symbol, to: Request.self)(UInt(bitPattern: thread)) != 0
+        }
+        return false
+    }
+
     /// Asks the copy of dash running on `thread` to stop what it's doing.
     /// dash, dashA...dashE are separate binaries, each with its own flag
     /// and a target thread, so every loaded copy is asked and only the one
@@ -286,7 +303,9 @@ final class LocalBackend: TerminalBackend, @unchecked Sendable {
                 }
                 // Cancel the innermost command, not the shell running it.
                 if let last = ios_getLastThreadId(), last != ios_getThreadId(root) {
-                    if cancelChild { pthread_cancel(last) }
+                    // Python stops itself (KeyboardInterrupt); cancelling
+                    // its thread would leave the interpreter half-alive.
+                    if cancelChild, !LocalBackend.requestPythonInterrupt(on: last) { pthread_cancel(last) }
                 } else if let shell = ios_getThreadId(root) {
                     // No child: dash itself is busy, in a loop.
                     LocalBackend.requestDashInterrupt(on: shell)

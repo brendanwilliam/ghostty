@@ -54,24 +54,28 @@ static const char *driver =
 // the interrupt needs lives in Python itself (sys._pycmd_thread), not in
 // per-copy globals. One interpreter at a time: it is process-wide.
 
-// Called from any thread (Ctrl-C), on any copy. No SIGINT handler is
+// Called from any thread (Ctrl-C), on any copy; returns 1 if it raised
+// KeyboardInterrupt in the interpreter running on `thread`. No SIGINT handler is
 // installed (that would replace the app's), so PyErr_SetInterrupt has
 // nothing to run; instead raise KeyboardInterrupt in the interpreter's
 // thread, which Python delivers between bytecodes.
-void python3_interrupt(void) {
-    if (!Py_IsInitialized()) return;
+int python3_interrupt(unsigned long thread) {
+    if (!Py_IsInitialized()) return 0;
     // PyGILState_Ensure keeps a pointer to the first interpreter ever
     // created, which is stale after a Py_Finalize/Py_Initialize cycle. Make
     // a thread state for the current main interpreter instead.
     PyThreadState *state = PyThreadState_New(PyInterpreterState_Main());
     PyEval_AcquireThread(state);
+    int delivered = 0;
     PyObject *id = PySys_GetObject("_pycmd_thread");
-    if (id) {
-        PyThreadState_SetAsyncExc(PyLong_AsUnsignedLong(id), PyExc_KeyboardInterrupt);
-    }
+    // Only the interpreter running on `thread`: it is one per process, and
+    // another tab's Ctrl-C must not stop it.
+    if (id && PyLong_AsUnsignedLong(id) == thread)
+        delivered = PyThreadState_SetAsyncExc(thread, PyExc_KeyboardInterrupt);
     PyThreadState_Clear(state);
     PyEval_ReleaseThread(state);
     PyThreadState_Delete(state);
+    return delivered;
 }
 
 static int bundledHome(char *out, size_t size) {

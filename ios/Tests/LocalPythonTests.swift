@@ -46,4 +46,34 @@ final class LocalPythonTests: XCTestCase {
             XCTAssertTrue(session.text.contains("\(i + 100)\r\n"), "run \(i): \(session.text.debugDescription)")
         }
     }
+
+    func testControlCStopsALoop() async throws {
+        let session = try await LocalTestSession(shell: .dash)
+        session.backend.write(Data("python3 -c 'while True: pass'\r".utf8))
+        try await session.waitFor { $0.hasSuffix("pass'\r\n") }
+        try await Task.sleep(for: .milliseconds(500))
+        session.backend.write(Data("\u{3}".utf8))
+        try await session.waitFor { $0.contains("KeyboardInterrupt") && $0.hasSuffix(" $ ") }
+        try await session.type("echo status $?\r")
+        XCTAssertTrue(session.text.contains("status 130\r\n"), session.text.debugDescription)
+        // Python can be started again.
+        try await session.type("python3 -c 'print(5)'\r")
+        XCTAssertTrue(session.text.contains("5\r\n"), session.text.debugDescription)
+    }
+
+    /// There is one interpreter per process: Ctrl-C in another tab must not
+    /// stop it.
+    func testControlCInAnotherTabLeavesPythonRunning() async throws {
+        let python = try await LocalTestSession(shell: .dash)
+        let other = try await LocalTestSession(shell: .dash)
+        python.backend.write(Data("python3 -c 'import time; time.sleep(2); print(\"finished\")'\r".utf8))
+        try await python.waitFor { $0.hasSuffix("print(\"finished\")'\r\n") }
+        other.backend.write(Data("cat\r".utf8))
+        try await other.waitFor { $0.hasSuffix("cat\r\n") }
+        try await Task.sleep(for: .milliseconds(300))
+        other.backend.write(Data("\u{3}".utf8))
+        try await other.waitFor { $0.contains("^C") && $0.hasSuffix(" $ ") }
+        try await python.waitFor { $0.contains("finished\r\n") }
+        XCTAssertFalse(python.text.contains("KeyboardInterrupt"), python.text.debugDescription)
+    }
 }

@@ -55,7 +55,9 @@ libghostty draws it like any other session.
   commands. Any other command that computes without ever blocking (an awk
   loop) can't be stopped: ios_system uses `pthread_cancel`, which needs a
   blocking call. The app says so, and closing the tab leaves that thread
-  spinning until the app quits.
+  spinning until the app quits. Python gets a KeyboardInterrupt instead
+  (`python3_interrupt`), so a loop stops at once; a long `time.sleep` or other
+  C call ends only when it returns.
 - **Lifetime:** iOS suspends the app in the background, which pauses
   commands. Local tabs aren't saved; they start fresh with the app.
 - **How dash finds commands:** it looks for executable files on `PATH`, and
