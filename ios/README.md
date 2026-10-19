@@ -106,6 +106,21 @@ program from stdin).
   file when adding a library; `AcknowledgementsTests` checks every entry has
   its text. `Spikes/Python/README.md` has the spike's findings.
 
+**Licenses of the command tools.** The file, text and shell tools come from
+the BSD systems (through Apple's file_cmds, shell_cmds and text_cmds as
+ported by ios_system), awk is the One True Awk, tar is libarchive, `less` is
+under the Less License. A scan of the headers of the shipped commands' source
+files (212 files in ios_system's `file_cmds`, `shell_cmds`, `text_cmds`,
+`bsd_find`, `bsd_diff`, `awk-awk-35`, `libarchive`, `less-34`) found no GPL
+code. Things the app has to acknowledge, and does in Settings >
+Acknowledgements: the BSD advertising clause that 50 files still carry (the
+Berkeley and NetBSD acknowledgement sentences), the Apple Public Source
+License in one `md5` header, and a few small permissive notices. Two files
+state no license (`cksum/crc32.c`, Apple's `id/open_directory.c`). This is a
+header scan, not legal advice. The command lists
+(`Resources/Local/*.plist`) name only commands whose frameworks the app
+embeds; `LocalCommandListTests` keeps them in step with the stub files.
+
 **Building dash.** `ios/scripts/build-dash.sh` builds dash and its copies
 (dashA to dashE) from holzschu/dash_iOS at a pinned commit, with the patch,
 for device and for the arm64 simulator, and replaces the prebuilt
