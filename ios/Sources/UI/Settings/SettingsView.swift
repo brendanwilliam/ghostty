@@ -31,6 +31,12 @@ struct SettingsView: View {
                 hostsSection
 
                 Section {
+                    NavigationLink("Shortcuts") { ShortcutFilesView() }
+                } footer: {
+                    Text("Shortcuts compiled with the cherri command in the terminal.")
+                }
+
+                Section {
                     NavigationLink("Acknowledgements") { AcknowledgementsView() }
                 }
             }

@@ -15,6 +15,7 @@ Requirements: Xcode 27, [Zig 0.16.0](https://ziglang.org/download/), and
 # Prebuilt command frameworks for the on-device shell (checked by SHA-256).
 ios/scripts/fetch-ios-system.sh
 ios/scripts/fetch-python.sh   # CPython 3.14 for the `python3` command
+ios/scripts/build-cherri.sh   # the `cherri` command (needs Go: brew install go)
 
 # From the repository root: build GhosttyKit with iOS device and simulator slices.
 zig build -Demit-xcframework=true -Demit-macos-app=false -Dxcframework-target=ios
@@ -143,3 +144,29 @@ simulator falls back to a small built-in prompt
 (`LocalBackend.Shell.builtin`) that supports pipes and redirection but not
 `&&`, `;` or variables. `LocalBackendTests` always use the built-in prompt;
 `LocalDashTests` run the real shell wherever dash is embedded.
+
+### Shortcuts with Cherri
+
+`cherri program.cherri` compiles a [Cherri](https://github.com/electrikmilk/cherri)
+program (write it with `vim`) into `program.shortcut` in the same folder,
+fully offline. `cherri --help` lists the options; use `--output=path` to
+choose the file. Settings > Shortcuts lists the `.shortcut` files in the
+home folder with a share sheet for each.
+
+- **Signing.** The output is unsigned: signing goes through Apple's servers,
+  and Cherri's other signers (HubSign, a signing server) are not used.
+  Open the file in the Shortcuts app to add it, and share it from there to
+  sign it. Whether the Shortcuts app accepts an unsigned import on a phone
+  is not verified; only the simulator was tested.
+- **How it runs.** `scripts/build-cherri.sh` builds Cherri from a pinned
+  commit with Go (`-buildmode=c-archive`) into `cherri.framework`, with the
+  changes in `Cherri/`: `os.Exit` becomes a panic caught at the entry point,
+  every package variable is reset before each run (`Cherri/genreset`
+  generates this), and the command's own streams are used. One compile runs
+  at a time; other tabs wait. The Go runtime can't be unloaded, so the
+  framework stays mapped.
+- **License.** Cherri is GPL-2.0; the Acknowledgements screen carries the
+  text and names the source commit and these changes.
+- **Not available.** Commands that need macOS (`--open`, the Shortcuts
+  database for `--import`/actions lookups) and package installs through
+  git.

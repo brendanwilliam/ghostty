@@ -39,6 +39,13 @@
 		<string></string>
 		<string>directory</string>
 	</array>
+	<key>cherri</key>
+	<array>
+		<string>cherri.framework/cherri</string>
+		<string>cherri_main</string>
+		<string></string>
+		<string>no</string>
+	</array>
 	<key>python3</key>
 	<array>
 		<string>pycmd.framework/pycmd</string>

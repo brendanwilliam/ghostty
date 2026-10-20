@@ -47,6 +47,8 @@ enum Acknowledgements {
                             license: "BSD 3-Clause", file: "license-ios-system"),
             Acknowledgement(id: "bsd-tools", name: "File, text and shell tools", detail: "ls, cp, mv, rm, cat, grep, sed, sort, find, xargs, diff and the rest, from the BSD systems",
                             license: "BSD (Berkeley, NetBSD, FreeBSD, OpenBSD, Apple)", file: "license-bsd-tools"),
+            Acknowledgement(id: "cherri", name: "Cherri", detail: "The cherri command, which compiles Shortcuts programs",
+                            license: "GPL 2.0", file: "license-cherri"),
             Acknowledgement(id: "awk", name: "awk", detail: "The One True Awk",
                             license: "Lucent permissive license", file: "license-awk"),
             Acknowledgement(id: "libarchive", name: "libarchive", detail: "The tar command",
