@@ -33,7 +33,7 @@ struct SettingsView: View {
                 Section {
                     NavigationLink("Shortcuts") { ShortcutFilesView() }
                 } footer: {
-                    Text("Shortcuts compiled with the cherri command in the terminal.")
+                    Text("Shortcuts compiled with the cherri command. Add --sign to sign one while online.")
                 }
 
                 Section {

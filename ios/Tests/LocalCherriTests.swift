@@ -1,3 +1,4 @@
+import Network
 import XCTest
 @testable import GhosttyiOS
 
@@ -34,8 +35,7 @@ final class LocalCherriTests: XCTestCase {
         try await session.type("echo 'nonsense(' > bad.cherri\r")
         try await session.type("cherri bad.cherri; echo status $?\r")
         XCTAssertTrue(session.text.contains("status 1\r\n"), session.text.debugDescription)
-        try await session.type("cherri bad.cherri; echo status $?\r")
-        XCTAssertTrue(session.text.contains("Error"), session.text.debugDescription)
+        XCTAssertTrue(session.text.contains("Undefined action"), session.text.debugDescription)
         // The app is still here and compiles again afterwards.
         try await session.type("echo 'alert(\"ok\")' > ok.cherri\r")
         try await session.type("cherri ok.cherri; echo status $?\r")
@@ -85,5 +85,122 @@ final class ShortcutFilesTests: XCTestCase {
         try Data().write(to: root.appendingPathComponent("notes.txt"))
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -100)], ofItemAtPath: old.path)
         XCTAssertEqual(ShortcutFilesView.shortcutFiles(in: root).map(\.lastPathComponent), ["new.shortcut", "old.shortcut"])
+    }
+}
+
+/// Signing goes to a server over the network; these use a local one.
+final class LocalCherriSigningTests: XCTestCase {
+    override func setUpWithError() throws {
+        try XCTSkipUnless(LocalEnvironment.hasDash, "needs the real shell")
+        let framework = Bundle.main.bundleURL.appendingPathComponent("Frameworks/cherri.framework")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: framework.path), "cherri isn't bundled")
+    }
+
+    func testWithoutAFlagNothingIsSent() async throws {
+        let server = try SigningServer(reply: .signed)
+        defer { server.stop() }
+        let session = try await LocalTestSession(shell: .dash)
+        try await session.type("mkdir -p cherri-sign && cd cherri-sign && echo 'alert(\"x\")' > a.cherri\r")
+        try await session.type("cherri a.cherri; echo status $?\r")
+        XCTAssertTrue(session.text.contains("status 0\r\n"), session.text.debugDescription)
+        XCTAssertTrue(session.text.contains("unsigned"), session.text.debugDescription)
+        XCTAssertEqual(server.requests, 0)
+        try await session.type("cd .. && rm -r cherri-sign\r")
+    }
+
+    func testASigningServerReturnsASignedShortcut() async throws {
+        let server = try SigningServer(reply: .signed)
+        defer { server.stop() }
+        let session = try await LocalTestSession(shell: .dash)
+        try await session.type("mkdir -p cherri-sign && cd cherri-sign && echo 'alert(\"x\")' > a.cherri\r")
+        try await session.type("cherri a.cherri --signing-server=http://127.0.0.1:\(server.port)/sign; echo status $?\r")
+        XCTAssertTrue(session.text.contains("status 0\r\n"), session.text.debugDescription)
+        XCTAssertTrue(session.text.contains("(signed)"), session.text.debugDescription)
+        XCTAssertEqual(server.requests, 1)
+        XCTAssertTrue(server.lastBody.contains("\"shortcutName\":\"a\""), server.lastBody)
+        try await session.type("head -c 4 a.shortcut; echo; ls\r")
+        XCTAssertTrue(session.text.contains("AEA1"), session.text.debugDescription)
+        XCTAssertFalse(session.text.contains("a_unsigned"), session.text.debugDescription)
+        try await session.type("cd .. && rm -r cherri-sign\r")
+    }
+
+    func testAFailedSigningKeepsTheUnsignedShortcut() async throws {
+        let server = try SigningServer(reply: .failure)
+        defer { server.stop() }
+        let session = try await LocalTestSession(shell: .dash)
+        try await session.type("mkdir -p cherri-sign && cd cherri-sign && echo 'alert(\"x\")' > a.cherri\r")
+        try await session.type("cherri a.cherri --signing-server=http://127.0.0.1:\(server.port)/sign; echo status $?\r")
+        XCTAssertTrue(session.text.contains("status 1\r\n"), session.text.debugDescription)
+        XCTAssertTrue(session.text.contains("kept the unsigned shortcut"), session.text.debugDescription)
+        try await session.type("ls\r")
+        XCTAssertTrue(session.text.contains("a.shortcut"), session.text.debugDescription)
+        try await session.type("cd .. && rm -r cherri-sign\r")
+    }
+
+    func testOfflineKeepsTheUnsignedShortcut() async throws {
+        let session = try await LocalTestSession(shell: .dash)
+        try await session.type("mkdir -p cherri-sign && cd cherri-sign && echo 'alert(\"x\")' > a.cherri\r")
+        // Nothing listens on port 1.
+        try await session.type("cherri a.cherri --signing-server=http://127.0.0.1:1/sign; echo status $?\r")
+        XCTAssertTrue(session.text.contains("status 1\r\n"), session.text.debugDescription)
+        try await session.type("ls\r")
+        XCTAssertTrue(session.text.contains("a.shortcut"), session.text.debugDescription)
+        try await session.type("cd .. && rm -r cherri-sign\r")
+    }
+}
+
+/// A one-endpoint HTTP server standing in for a shortcut-signing-server.
+final class SigningServer: @unchecked Sendable {
+    enum Reply { case signed, failure }
+
+    private let listener: NWListener
+    private let reply: Reply
+    private let lock = NSLock()
+    private var _requests = 0
+    private var _lastBody = ""
+
+    var port: UInt16 { listener.port?.rawValue ?? 0 }
+    var requests: Int { lock.withLock { _requests } }
+    var lastBody: String { lock.withLock { _lastBody } }
+
+    init(reply: Reply) throws {
+        self.reply = reply
+        listener = try NWListener(using: .tcp, on: .any)
+        listener.newConnectionHandler = { [weak self] connection in self?.handle(connection) }
+        let ready = DispatchSemaphore(value: 0)
+        listener.stateUpdateHandler = { if case .ready = $0 { ready.signal() } }
+        listener.start(queue: .global())
+        _ = ready.wait(timeout: .now() + 5)
+    }
+
+    func stop() { listener.cancel() }
+
+    private func handle(_ connection: NWConnection) {
+        connection.start(queue: .global())
+        var received = Data()
+        func read() {
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { [weak self] data, _, _, error in
+                guard let self, error == nil else { return }
+                received += data ?? Data()
+                let text = String(decoding: received, as: UTF8.self)
+                guard let split = text.range(of: "\r\n\r\n") else { return read() }
+                let head = text[..<split.lowerBound]
+                let length = head.lowercased().components(separatedBy: "content-length:").dropFirst().first
+                    .flatMap { Int($0.prefix { $0 != "\r" }.trimmingCharacters(in: .whitespaces)) } ?? 0
+                let body = String(text[split.upperBound...])
+                guard body.utf8.count >= length else { return read() }
+                self.lock.withLock { self._requests += 1; self._lastBody = body }
+                let response: Data
+                switch self.reply {
+                case .signed:
+                    let payload = Data("AEA1 signed".utf8)
+                    response = Data("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: \(payload.count)\r\nConnection: close\r\n\r\n".utf8) + payload
+                case .failure:
+                    response = Data("HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/octet-stream\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
+                }
+                connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
+            }
+        }
+        read()
     }
 }

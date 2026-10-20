@@ -153,11 +153,18 @@ fully offline. `cherri --help` lists the options; use `--output=path` to
 choose the file. Settings > Shortcuts lists the `.shortcut` files in the
 home folder with a share sheet for each.
 
-- **Signing.** The output is unsigned: signing goes through Apple's servers,
-  and Cherri's other signers (HubSign, a signing server) are not used.
-  Open the file in the Shortcuts app to add it, and share it from there to
-  sign it. Whether the Shortcuts app accepts an unsigned import on a phone
-  is not verified; only the simulator was tested.
+- **Signing.** By default the output is unsigned and nothing leaves the
+  device. While online, `cherri program.cherri --sign` sends the compiled
+  shortcut to RoutineHub's HubSign service and writes the signed file
+  (`AEA1`, importable anywhere); `--signing-server=URL` does the same with a
+  server of your own running
+  [shortcut-signing-server](https://github.com/scaxyz/shortcut-signing-server).
+  Signing is opt-in because the shortcut's contents go to that server. If
+  it fails (offline, the service refuses), the unsigned file is kept under
+  the same name, the message says so and the status is 1; run it again
+  when online. The signing tests use a local server; HubSign itself was
+  not called, and neither was a phone. Apple's own signing (the
+  `shortcuts sign` command) only exists on macOS.
 - **How it runs.** `scripts/build-cherri.sh` builds Cherri from a pinned
   commit with Go (`-buildmode=c-archive`) into `cherri.framework`, with the
   changes in `Cherri/`: `os.Exit` becomes a panic caught at the entry point,

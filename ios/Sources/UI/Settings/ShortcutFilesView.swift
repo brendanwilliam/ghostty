@@ -3,8 +3,8 @@ import SwiftUI
 /// The `.shortcut` files in the local shell's home folder, made by
 /// `cherri program.cherri`, with a share sheet for each.
 ///
-/// The files are not signed: signing needs Apple's servers, so the
-/// Shortcuts app does the signing when someone imports and re-shares one.
+/// Files are unsigned unless compiled with `cherri --sign`, which sends the
+/// shortcut to a signing service (opt-in, needs a connection).
 struct ShortcutFilesView: View {
     @State private var files: [URL] = []
 
@@ -15,7 +15,7 @@ struct ShortcutFilesView: View {
                     Text("No shortcuts yet.")
                         .foregroundStyle(.secondary)
                 } footer: {
-                    Text("Write a program in the terminal (for example with vim) and compile it with `cherri hello.cherri`. The result appears here.")
+                    Text("Write a program in the terminal (for example with vim) and compile it with `cherri hello.cherri`; add `--sign` while online to sign it. The result appears here.")
                 }
             } else {
                 Section {
@@ -25,7 +25,7 @@ struct ShortcutFilesView: View {
                         }
                     }
                 } footer: {
-                    Text("Open a shortcut in the Shortcuts app to add it, then share it from there to sign it.")
+                    Text("Signed shortcuts import on any device. Unsigned ones may not.")
                 }
             }
         }
