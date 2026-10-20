@@ -24,6 +24,13 @@ final class AcknowledgementsTests: XCTestCase {
         XCTAssertTrue(text.contains("Python Software Foundation"))
     }
 
+    func testCherrisLicenseAndSourceAreThere() throws {
+        let item = try XCTUnwrap(Acknowledgements.all.first { $0.id == "cherri" })
+        let text = try XCTUnwrap(item.text)
+        XCTAssertTrue(text.contains("GNU GENERAL PUBLIC LICENSE"))
+        XCTAssertTrue(text.contains("bcc0095754e2cc0baaeb4d93dae172b8153b4716"))
+    }
+
     func testTheLinkingExceptionIsNamedForLibgit2() throws {
         let item = try XCTUnwrap(Acknowledgements.all.first { $0.id == "libgit2" })
         XCTAssertTrue(try XCTUnwrap(item.text).localizedCaseInsensitiveContains("linking exception"))

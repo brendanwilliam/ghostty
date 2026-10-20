@@ -31,6 +31,12 @@ struct SettingsView: View {
                 hostsSection
 
                 Section {
+                    NavigationLink("Shortcuts") { ShortcutFilesView() }
+                } footer: {
+                    Text("Shortcuts compiled with the cherri command. Add --sign to sign one while online.")
+                }
+
+                Section {
                     NavigationLink("Acknowledgements") { AcknowledgementsView() }
                 }
             }

@@ -280,6 +280,10 @@ targets:
         link: false
       - target: pythonE
         link: false
+      # The Cherri compiler for Shortcuts, run as `cherri`. Run
+      # scripts/build-cherri.sh first (needs Go).
+      - framework: Frameworks/cherri.xcframework
+        link: false
       - framework: Frameworks/files.xcframework
         link: false
       - framework: Frameworks/text.xcframework
