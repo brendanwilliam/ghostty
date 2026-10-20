@@ -28,4 +28,21 @@ final class AcknowledgementsTests: XCTestCase {
         let item = try XCTUnwrap(Acknowledgements.all.first { $0.id == "libgit2" })
         XCTAssertTrue(try XCTUnwrap(item.text).localizedCaseInsensitiveContains("linking exception"))
     }
+
+    /// The BSD advertising clause: files in the tools still carry it, so
+    /// both acknowledgements are shown.
+    func testTheBSDAcknowledgementsAreShown() throws {
+        let tools = try XCTUnwrap(Acknowledgements.all.first { $0.id == "bsd-tools" })
+        let text = try XCTUnwrap(tools.text)
+        XCTAssertTrue(text.contains("This product includes software developed by the University of California, Berkeley and its contributors."))
+        XCTAssertTrue(text.contains("This product includes software developed by the NetBSD Foundation, Inc. and its contributors."))
+    }
+
+    func testTheAppleLicenseAndTheOtherNoticesAreThere() throws {
+        let apsl = try XCTUnwrap(Acknowledgements.all.first { $0.id == "apsl" }?.text)
+        XCTAssertTrue(apsl.contains("APPLE PUBLIC SOURCE LICENSE"))
+        let other = try XCTUnwrap(Acknowledgements.all.first { $0.id == "other-notices" }?.text)
+        XCTAssertTrue(other.contains("RSA Data Security"))
+        XCTAssertTrue(other.contains("BEER-WARE"))
+    }
 }

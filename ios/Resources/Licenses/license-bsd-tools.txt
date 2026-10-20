@@ -1,0 +1,42 @@
+The file, text and shell command-line tools (ls, cp, mv, rm, chmod, cat, grep, sed, sort, head, tail, find, xargs, diff, date, env and the rest) are derived from the BSD operating systems, through Apple's open source releases of file_cmds, shell_cmds and text_cmds and ios_system's ports of them. Their source files carry the copyright of, among others:
+
+  The Regents of the University of California
+  The NetBSD Foundation, Inc.
+  The FreeBSD Project
+  The OpenBSD Project and its contributors
+  Apple Inc.
+
+This product includes software developed by the University of California, Berkeley and its contributors.
+
+This product includes software developed by the NetBSD Foundation, Inc. and its contributors.
+
+The terms the files are distributed under are those of the BSD license:
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+3. Neither the name of the University nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGE.
+
+Some files, for the same list of holders, use the two-clause form (without
+clause 3) or name the NetBSD Foundation, Inc. in place of the University.
+The md5 command also includes a header covered by the Apple Public Source
+License (see that entry).
